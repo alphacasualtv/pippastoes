@@ -199,31 +199,30 @@ def transform_url(url: str) -> str:
     # Don't transform media URLs
     if is_media_url(url):
         return None  # Return None to indicate this URL should be skipped
-        
+
     match = re.match(URL_PATTERN, url)
     if not match:
         return url
-        
+
     domain = match.group(1)
     path = match.group(2)
-    
-    # Special handling for Reddit domains (check this first)
+
+    # New: Transform all Reddit links to vxreddit.com for embedding
     if 'reddit.com' in domain.lower():
-        # Handle old.reddit.com and www.reddit.com
         clean_path = path.rstrip('/')  # Remove trailing slash if present
-        # If it's a post URL (contains '/comments/' or '/r/subreddit/comments/')
+        # Optionally log if it's a post link
         if '/comments/' in clean_path:
-            return f'https://vxreddit.com{clean_path}'
-        # If it's a subreddit URL or other Reddit URL, keep as is for proper embedding
-        return f'https://reddit.com{clean_path}'
-    
+            logger.info(f"Reddit post link detected: {url}")
+        # Rewrite all Reddit links to vxreddit.com
+        return f'https://vxreddit.com{clean_path}'
+
     # Special handling for Twitter/X domains
     if any(twitter_domain in domain for twitter_domain in ['twitter.com', 'x.com']):
         # Remove any www. prefix if present
         clean_domain = domain.replace('www.', '')
         # Replace either twitter.com or x.com with fxtwitter.com
         return f'https://fxtwitter.com{path}'
-    
+
     # Check if this domain needs transformation
     for original, replacement in URL_TRANSFORMATIONS.items():
         if original in domain:
@@ -242,7 +241,7 @@ def transform_url(url: str) -> str:
             # For all other transformations
             new_domain = domain.replace(original, replacement)
             return f'https://{new_domain}{path}'
-    
+
     return url
 
 def process_nested_links(content: str) -> str:
