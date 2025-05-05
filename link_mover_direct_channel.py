@@ -234,10 +234,11 @@ def transform_url(url: str) -> str:
                     if video_id:
                         return f'https://youtu.be/{video_id.group(1)}'
                 elif '/shorts/' in path:
-                    # Transform YouTube shorts to regular YouTube URLs
                     shorts_id = path.split('/shorts/')[1].split('?')[0]
                     return f'https://youtu.be/{shorts_id}'
-            
+                elif '/live/' in path:
+                    live_id = path.split('/live/')[1].split('?')[0]
+                    return f'https://youtu.be/{live_id}'
             # For all other transformations
             new_domain = domain.replace(original, replacement)
             return f'https://{new_domain}{path}'
