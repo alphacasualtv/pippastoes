@@ -411,10 +411,11 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
                 except hikari.NotFoundError:
                     return  # Original message deleted, do nothing
                 snarky_comment = random.choice(SNARKY_COMMENTS)
+                # Reply to the original message, @ the user, and include the snarky comment
                 await bot.rest.create_message(
                     event.channel_id,
                     f"{author_mention} {snarky_comment}",
-                    reply=orig_msg_id
+                    reply_to=orig_msg_id
                 )
             except Exception as e:
                 logger.error(f"Error replying to original message: {e}")
