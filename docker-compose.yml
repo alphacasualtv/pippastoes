@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  discord-link-mover:
+    build: .
+    container_name: discord-link-mover
+    restart: unless-stopped
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      SOURCE_CHANNEL_ID: ${SOURCE_CHANNEL_ID}
+      DESTINATION_CHANNEL_ID: ${DESTINATION_CHANNEL_ID}
+    volumes:
+      - ./logs:/app/logs
+      - ./recent_links.json:/app/recent_links.json
+    # No ports needed for Discord bots 
