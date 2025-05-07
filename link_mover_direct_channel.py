@@ -405,13 +405,13 @@ async def on_ready(event: hikari.ShardReadyEvent) -> None:
 
 @bot.listen()
 async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
-    # No debug logs for entry/exit, only major actions
     if event.is_bot or not event.content:
         return
 
     author = event.author
     author_mention = f"<@{author.id}>" if author else "Unknown User"
     author_id = str(author.id) if author else None
+    channel_mention = f"<#{event.channel_id}>"
 
     matches = list(re.finditer(URL_PATTERN, event.content))
     full_urls = [match.group(0) for match in matches]
@@ -421,10 +421,44 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     cleanup_recent_links()
     now = time.time()
 
-    transformable_links = []
-    non_transformable_links = []
+    # Extract mentions and preserve formatting
+    cleaned_content, mentions = extract_mentions(event.content)
+    mention_str = " ".join(mentions) if mentions else ""
+
+    # --- Duplicate detection and snarky comment ---
+    for url in full_urls:
+        transformed = await transform_and_expand_url(url)
+        if transformed and transformed != url:
+            norm_trans_url = normalize_link(transformed.rstrip('/'))
+            entry = recent_links.get(norm_trans_url)
+            is_dup = False
+            if entry:
+                ts, orig_msg_id, entry_user_id = entry if len(entry) == 3 else (*entry, None)
+                if entry_user_id == author_id:
+                    if now - ts < 48 * 3600:
+                        is_dup = True
+                else:
+                    if now - ts < 72 * 3600:
+                        is_dup = True
+            if is_dup:
+                # Delete the message and send a snarky comment
+                try:
+                    await bot.rest.delete_message(event.channel_id, event.message_id)
+                except Exception as e:
+                    logger.error(f"Error deleting duplicate message: {e}")
+                try:
+                    snarky_comment = random.choice(SNARKY_COMMENTS)
+                    await bot.rest.create_message(
+                        event.channel_id,
+                        f"{author_mention} {snarky_comment}"
+                    )
+                except Exception as e:
+                    logger.error(f"Error sending snarky comment: {e}")
+                return  # Do not process further if any link is a duplicate
+
     moved_any = False
     duplicate_found = False
+    non_transformable_links = []
 
     for url in full_urls:
         transformed = await transform_and_expand_url(url)
@@ -443,24 +477,27 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
             if is_dup:
                 duplicate_found = True
                 continue
-            transformable_links.append((url, transformed))
+            # Compose the message: mentions, cleaned text, link, and attribution
+            message_parts = []
+            if mention_str:
+                message_parts.append(mention_str)
+            if cleaned_content:
+                message_parts.append(cleaned_content)
+            message_parts.append(transformed)
+            message_parts.append(f"(Posted by {author_mention} from {channel_mention})")
+            final_message = "\n".join([part for part in message_parts if part])
+            try:
+                await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message)
+                logger.info(f"Moved link to destination: {transformed}")
+                moved_any = True
+                recent_links[norm_trans_url] = [now, event.message_id, author_id]
+            except hikari.ForbiddenError:
+                logger.error("Bot doesn't have permission to post in the destination channel")
+                print_permissions_guide()
+            except Exception as e:
+                logger.error(f"Error posting link to destination channel: {e}")
         else:
             non_transformable_links.append(url)
-
-    for orig_url, transformed in transformable_links:
-        try:
-            context_message = f"Link from <#{event.channel_id}> by {author_mention}"
-            await bot.rest.create_message(DESTINATION_CHANNEL_ID, context_message)
-            await bot.rest.create_message(DESTINATION_CHANNEL_ID, transformed)
-            logger.info(f"Moved link to destination: {transformed}")
-            moved_any = True
-            norm_trans_url = normalize_link(transformed.rstrip('/'))
-            recent_links[norm_trans_url] = [now, event.message_id, author_id]
-        except hikari.ForbiddenError:
-            logger.error("Bot doesn't have permission to post in the destination channel")
-            print_permissions_guide()
-        except Exception as e:
-            logger.error(f"Error posting link to destination channel: {e}")
 
     if moved_any:
         save_recent_links()
