@@ -411,139 +411,82 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
         return
     logger.info(f"[DEBUG] Raw message content: {event.content}")
 
-    # Get message author information
     author = event.author
-    author_name = author.username if author else "Unknown User"
     author_mention = f"<@{author.id}>" if author else "Unknown User"
     author_id = str(author.id) if author else None
 
-    # Process content for nested links first (async)
-    processed_content = await process_nested_links_async(event.content)
-
-    # Extract all URLs from the processed message
-    urls = re.findall(URL_PATTERN, processed_content)
-    full_urls = [f"https://{domain}{path}" for domain, path in urls]
+    # Extract all URLs from the message
+    matches = list(re.finditer(URL_PATTERN, event.content))
+    full_urls = [match.group(0) for match in matches]
     logger.info(f"[DEBUG] URLs found in message: {full_urls}")
     if not full_urls:
-        logger.info("[DEBUG] Returning early: No URLs found in message.")
+        logger.info("[DEBUG] No URLs found in message. Returning early.")
         return
-    for url in full_urls:
-        if needs_expansion(url):
-            logger.info(f"[DEBUG] URL flagged for expansion: {url}")
-        else:
-            logger.info(f"[DEBUG] URL NOT flagged for expansion: {url}")
-    normalized_urls = [normalize_link(url) for url in full_urls]
 
     # Cleanup old links before checking
     cleanup_recent_links()
     now = time.time()
 
-    # Always process for both source and destination channels
-    if event.channel_id in [SOURCE_CHANNEL_ID, DESTINATION_CHANNEL_ID]:
-        # Extract any mentions from the original message
-        cleaned_content, mentions = extract_mentions(processed_content)
-        mentions_str = ' '.join(mentions) if mentions else ''
+    # Track if any embeddable links were processed
+    embeddable_found = False
 
-        # Get channel name
-        try:
-            source_channel = await bot.rest.fetch_channel(event.channel_id)
-            source_channel_name = source_channel.name
-        except Exception as e:
-            logger.error(f"Error fetching channel name: {e}")
-            source_channel_name = f"channel-{event.channel_id}"
-
-        # Post links to destination channel
-        success_count = 0
-
-        # Reconstruct full URLs from regex matches and transform them
-        full_urls = [f"https://{domain}{path}" for domain, path in urls]
-
-        # First check if any URLs are direct media links
-        if any(is_media_url(url) for url in full_urls):
-            logger.info("Message contains direct media links - keeping in original channel")
-            try:
-                await bot.rest.delete_message(event.channel_id, event.message_id)
-                logger.info("Deleted original message containing direct media links")
-            except Exception as e:
-                logger.error(f"Error deleting original message: {e}")
-            return
-
-        # Transform non-media URLs
-        transformed_urls = [await transform_and_expand_url(url) for url in full_urls]
-
-        # Log URL transformations
-        for orig, trans in zip(full_urls, transformed_urls):
-            if trans:
-                logger.info(f"URL Transformation: {orig} -> {trans}")
+    for url in full_urls:
+        logger.info(f"[DEBUG] Processing URL: {url}")
+        # Transform and expand
+        transformed = await transform_and_expand_url(url)
+        logger.info(f"[DEBUG] Transformed URL: {transformed}")
+        if not transformed:
+            logger.info(f"[DEBUG] Skipping media or invalid link: {url}")
+            continue
+        # Normalize for duplicate check (case-insensitive, strip trailing slash)
+        norm_trans_url = normalize_link(transformed.rstrip('/'))
+        entry = recent_links.get(norm_trans_url)
+        is_dup = False
+        if entry:
+            ts, orig_msg_id, entry_user_id = entry if len(entry) == 3 else (*entry, None)
+            if entry_user_id == author_id:
+                if now - ts < 48 * 3600:
+                    is_dup = True
             else:
-                logger.info(f"URL skipped (media content): {orig}")
+                if now - ts < 72 * 3600:
+                    is_dup = True
+        if is_dup:
+            logger.info(f"[DEBUG] Duplicate detected for {transformed} (user: {author_id}), skipping move.")
+            continue
+        # Post to destination
+        try:
+            context_message = f"Link from <#{event.channel_id}> by {author_mention}"
+            await bot.rest.create_message(DESTINATION_CHANNEL_ID, context_message)
+            await bot.rest.create_message(DESTINATION_CHANNEL_ID, transformed)
+            logger.info(f"[DEBUG] Posted link to destination: {transformed}")
+            embeddable_found = True
+            # Record the moved link
+            recent_links[norm_trans_url] = [now, event.message_id, author_id]
+        except hikari.ForbiddenError:
+            logger.error("[DEBUG] Bot doesn't have permission to post in the destination channel")
+            print_permissions_guide()
+        except Exception as e:
+            logger.error(f"[DEBUG] Error posting link to destination channel: {e}")
 
-        # Filter out None values (which indicate media links)
-        url_pairs = [(orig, trans) for orig, trans in zip(full_urls, transformed_urls) if trans is not None]
-
-        if not url_pairs:  # If all URLs were media or no valid URLs
-            try:
-                await bot.rest.delete_message(event.channel_id, event.message_id)
-                logger.info("Deleted original message containing only media or invalid links")
-            except Exception as e:
-                logger.error(f"Error deleting original message: {e}")
-            return
-
-        for original_url, transformed_url in url_pairs:
-            norm_trans_url = normalize_link(transformed_url)
-            entry = recent_links.get(norm_trans_url)
-            is_dup = False
-            if entry:
-                ts, orig_msg_id, entry_user_id = entry if len(entry) == 3 else (*entry, None)
-                if entry_user_id == author_id:
-                    # Self repost: block if within 48 hours
-                    if now - ts < 48 * 3600:
-                        is_dup = True
-                else:
-                    # Other user repost: block if within 72 hours
-                    if now - ts < 72 * 3600:
-                        is_dup = True
-            if is_dup:
-                logger.info(f"Duplicate detected for {transformed_url} in destination channel, skipping move.")
-                continue
-            try:
-                # Format the message with mentions first, then the link
-                # Use zero-width space after mentions to ensure proper embedding
-                if mentions:
-                    message_content = f"{mentions_str}\u200b{transformed_url}"
-                    context_message = f"Link from #{source_channel_name} by {author_mention}"
-                else:
-                    message_content = transformed_url
-                    context_message = f"Link from #{source_channel_name} by {author_mention}"
-
-                # Send context message first
-                await bot.rest.create_message(DESTINATION_CHANNEL_ID, context_message)
-
-                # Send the link in a separate message for better embedding
-                await bot.rest.create_message(DESTINATION_CHANNEL_ID, message_content)
-
-                logger.info(f"Successfully moved link to destination channel: {transformed_url}")
-                success_count += 1
-                # Record the moved link
-                recent_links[norm_trans_url] = [now, event.message_id, author_id]
-            except hikari.ForbiddenError:
-                logger.error("Error: Bot doesn't have permission to post in the destination channel")
-                print_permissions_guide()
-                continue
-            except Exception as e:
-                logger.error(f"Error posting link to destination channel: {e}")
-                continue
-
-        # Delete the original message after processing
+    # If any embeddable links were processed, delete the original message
+    if embeddable_found:
         try:
             await bot.rest.delete_message(event.channel_id, event.message_id)
-            logger.info("Deleted original message containing links")
+            logger.info("[DEBUG] Deleted original message containing embeddable links")
         except hikari.ForbiddenError:
-            logger.error("Error: Bot doesn't have permission to delete messages in channel")
+            logger.error("[DEBUG] Bot doesn't have permission to delete messages in channel")
         except Exception as e:
-            logger.error(f"Error deleting original message: {e}")
-
+            logger.error(f"[DEBUG] Error deleting original message: {e}")
         save_recent_links()
+    else:
+        # If only media or invalid links, just delete and log
+        try:
+            await bot.rest.delete_message(event.channel_id, event.message_id)
+            logger.info("[DEBUG] Deleted original message containing only media or invalid links")
+        except hikari.ForbiddenError:
+            logger.error("[DEBUG] Bot doesn't have permission to delete messages in channel")
+        except Exception as e:
+            logger.error(f"[DEBUG] Error deleting original message: {e}")
 
 def main():
     logger.info("Starting Discord Link Mover Bot (Direct Channel Version)...")
