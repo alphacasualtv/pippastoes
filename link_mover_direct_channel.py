@@ -165,12 +165,12 @@ SNARKY_COMMENTS = [
 
 # Add a helper to detect short/mobile links that need expansion
 SHORT_LINK_PATTERNS = [
-    r"https?://(www\.)?reddit\.com/r/[^/]+/s/[A-Za-z0-9]+",  # Reddit mobile short
-    r"https?://(www\.)?redd\.it/[A-Za-z0-9]+",              # Reddit short
-    r"https?://t\.co/[A-Za-z0-9]+",                         # Twitter short
-    r"https?://youtu\.be/[A-Za-z0-9_-]+",                   # YouTube short
-    r"https?://(www\.)?instagram\.com/s/[A-Za-z0-9]+",     # Instagram short
-    r"https?://(www\.)?ig\.me/[A-Za-z0-9]+",               # Instagram short
+    r"https?://(www\.)?reddit\.com/r/[^/]+/s/[A-Za-z0-9]+/?",  # Reddit mobile short (allow trailing slash)
+    r"https?://(www\.)?redd\.it/[A-Za-z0-9]+/?",              # Reddit short
+    r"https?://t\.co/[A-Za-z0-9]+/?",                         # Twitter short
+    r"https?://youtu\.be/[A-Za-z0-9_-]+/?",                   # YouTube short
+    r"https?://(www\.)?instagram\.com/s/[A-Za-z0-9]+/?",     # Instagram short
+    r"https?://(www\.)?ig\.me/[A-Za-z0-9]+/?",               # Instagram short
 ]
 
 def needs_expansion(url: str) -> bool:
@@ -409,6 +409,12 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     # Extract all URLs from the processed message
     urls = re.findall(URL_PATTERN, processed_content)
     full_urls = [f"https://{domain}{path}" for domain, path in urls]
+    logger.info(f"[DEBUG] URLs found in message: {full_urls}")
+    for url in full_urls:
+        if needs_expansion(url):
+            logger.info(f"[DEBUG] URL flagged for expansion: {url}")
+        else:
+            logger.info(f"[DEBUG] URL NOT flagged for expansion: {url}")
     normalized_urls = [normalize_link(url) for url in full_urls]
     
     # Cleanup old links before checking
