@@ -16,8 +16,10 @@ RUN useradd -m botuser
 # Copy bot code and all necessary files
 COPY . .
 
-# Create logs directory, set ownership and permissions
-RUN mkdir -p logs && chown -R botuser:botuser logs && chmod -R 775 logs
+# Create logs directory and set ownership/permissions for logs and /app
+RUN mkdir -p logs && \
+    chown -R botuser:botuser /app && \
+    chmod -R 775 /app
 
 # Set environment variables for Python
 ENV PYTHONUNBUFFERED=1
@@ -26,6 +28,4 @@ ENV PYTHONUNBUFFERED=1
 USER botuser
 
 # Expose no ports (Discord bots are outbound only)
-
-# Default command
 CMD ["python", "link_mover_direct_channel.py"]
