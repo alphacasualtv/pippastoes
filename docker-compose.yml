@@ -11,7 +11,10 @@ services:
       - DESTINATION_CHANNEL_ID=${DESTINATION_CHANNEL_ID}
     volumes:
       - link-mover-logs:/app/logs
+      - link-mover-data:/app/data
     restart: unless-stopped
 volumes:
   link-mover-logs:
     name: link-mover-logs
+  link-mover-data:
+    name: link-mover-data
