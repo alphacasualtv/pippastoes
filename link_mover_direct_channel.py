@@ -176,7 +176,9 @@ SHORT_LINK_PATTERNS = [
 def needs_expansion(url: str) -> bool:
     for pattern in SHORT_LINK_PATTERNS:
         if re.match(pattern, url):
+            logger.info(f"[DEBUG] needs_expansion: {url} matches pattern {pattern}")
             return True
+    logger.info(f"[DEBUG] needs_expansion: {url} does NOT match any short patterns")
     return False
 
 async def expand_url(url: str) -> str:
@@ -192,15 +194,14 @@ async def expand_url(url: str) -> str:
 
 # Update transform_url to handle expanded Reddit /s/ links
 async def transform_and_expand_url(url: str) -> str:
+    logger.info(f"[DEBUG] Entering transform_and_expand_url for: {url}")
     logger.info(f"[DEBUG] Original URL: {url}")
-    # If it's a short/mobile link, expand it first
     expanded_url = url
     if needs_expansion(url):
         expanded_url = await expand_url(url)
         logger.info(f"[DEBUG] Expanded URL: {expanded_url}")
     else:
         logger.info(f"[DEBUG] No expansion needed for: {url}")
-    # Now apply the normal transformation logic
     transformed = transform_url(expanded_url)
     logger.info(f"[DEBUG] Transformed URL: {transformed}")
     if transformed != expanded_url:
@@ -236,15 +237,18 @@ def is_media_url(url: str) -> bool:
     
     # Check for direct media file extensions
     if any(url_lower.endswith(ext) for ext in MEDIA_EXTENSIONS):
+        logger.info(f"[DEBUG] is_media_url: {url} classified as media by extension")
         return True
     
     # Check for video hosting domains (excluding YouTube shorts)
     for domain in VIDEO_DOMAINS:
         if domain in url_lower and 'youtube.com/shorts' not in url_lower:
+            logger.info(f"[DEBUG] is_media_url: {url} classified as media by domain {domain}")
             return True
             
     # Special checks for specific platforms
     if 'imgur.com' in url_lower and any(ext in url_lower for ext in ['.mp4', '.gifv']):
+        logger.info(f"[DEBUG] is_media_url: {url} classified as media by imgur rule")
         return True
     
     # Remove YouTube shorts check since we want to transform these
@@ -393,9 +397,9 @@ async def on_ready(event: hikari.ShardReadyEvent) -> None:
 @bot.listen()
 async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     """Event fired when a message is created."""
-    # Ignore messages from the bot itself
     if event.is_bot or not event.content:
         return
+    logger.info(f"[DEBUG] Raw message content: {event.content}")
     
     # Get message author information
     author = event.author
