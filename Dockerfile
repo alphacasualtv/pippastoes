@@ -13,14 +13,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy bot code and all necessary files
 COPY . .
 
-# Create logs directory and ensure permissions
-RUN mkdir -p logs && chmod -R 755 logs
+# Create logs directory, set ownership and permissions
+RUN mkdir -p logs && chown -R botuser:botuser logs && chmod -R 775 logs
+
+# Create non-root user
+RUN useradd -m botuser
 
 # Set environment variables for Python
 ENV PYTHONUNBUFFERED=1
 
-# Run as non-root user for security
-RUN useradd -m botuser
+# Switch to non-root user
 USER botuser
 
 # Expose no ports (Discord bots are outbound only)
