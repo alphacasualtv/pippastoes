@@ -38,7 +38,7 @@ def save_recent_links():
     except PermissionError as e:
         logger.error(f"Failed to write to {RECENT_LINKS_FILE}: {e}")
         logger.warning("Continuing without saving recent links. This may cause duplicate detection issues.")
-
+        
 # Cleanup old links
 def cleanup_recent_links():
     now = time.time()
