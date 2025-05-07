@@ -425,23 +425,25 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     cleaned_content, mentions = extract_mentions(event.content)
     mention_str = " ".join(mentions) if mentions else ""
 
-    # --- Duplicate detection and snarky comment ---
-    # Phase 1: Build a set of unique, transformed links for this message
-    transformed_links = []
-    seen_links = set()
+    # --- Strict per-message deduplication: only post transformed links ---
+    # Map each original link to its transformed version
+    orig_to_trans = {}
     for url in full_urls:
         transformed = await transform_and_expand_url(url)
-        # Always prefer the transformed version if it exists
-        final_url = transformed if transformed else url
-        norm_final_url = normalize_link(final_url.rstrip('/'))
-        if norm_final_url not in seen_links:
-            seen_links.add(norm_final_url)
-            transformed_links.append((url, final_url, transformed))
+        # If transformation returns None (media), skip
+        if transformed is None:
+            continue
+        orig_to_trans[url] = transformed
+
+    # Only keep unique transformed links
+    unique_transformed = {}
+    for orig, trans in orig_to_trans.items():
+        norm_trans = normalize_link(trans.rstrip('/'))
+        unique_transformed[norm_trans] = trans  # Only the transformed version matters
 
     # Phase 2: Check for global duplicates (any transformed link already posted)
-    for orig_url, final_url, transformed in transformed_links:
-        norm_final_url = normalize_link(final_url.rstrip('/'))
-        entry = recent_links.get(norm_final_url)
+    for norm_trans, trans in unique_transformed.items():
+        entry = recent_links.get(norm_trans)
         is_dup = False
         if entry:
             ts, orig_msg_id, entry_user_id = entry if len(entry) == 3 else (*entry, None)
@@ -472,44 +474,39 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     non_transformable_links = []
 
     # Phase 3: Post only unique, transformed links
-    for orig_url, final_url, transformed in transformed_links:
-        # Only post the transformed version if it exists, otherwise skip
-        if transformed and transformed != orig_url:
-            norm_final_url = normalize_link(final_url.rstrip('/'))
-            entry = recent_links.get(norm_final_url)
-            is_dup = False
-            if entry:
-                ts, orig_msg_id, entry_user_id = entry if len(entry) == 3 else (*entry, None)
-                if entry_user_id == author_id:
-                    if now - ts < 48 * 3600:
-                        is_dup = True
-                else:
-                    if now - ts < 72 * 3600:
-                        is_dup = True
-            if is_dup:
-                duplicate_found = True
-                continue
-            # Compose the message: mentions, cleaned text, link, and attribution
-            message_parts = []
-            if mention_str:
-                message_parts.append(mention_str)
-            if cleaned_content:
-                message_parts.append(cleaned_content)
-            message_parts.append(final_url)
-            message_parts.append(f"(Posted by {author_mention} from {channel_mention})")
-            final_message = "\n".join([part for part in message_parts if part])
-            try:
-                await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message)
-                logger.info(f"Moved link to destination: {final_url}")
-                moved_any = True
-                recent_links[norm_final_url] = [now, event.message_id, author_id]
-            except hikari.ForbiddenError:
-                logger.error("Bot doesn't have permission to post in the destination channel")
-                print_permissions_guide()
-            except Exception as e:
-                logger.error(f"Error posting link to destination channel: {e}")
-        else:
-            non_transformable_links.append(orig_url)
+    for norm_trans, trans in unique_transformed.items():
+        entry = recent_links.get(norm_trans)
+        is_dup = False
+        if entry:
+            ts, orig_msg_id, entry_user_id = entry if len(entry) == 3 else (*entry, None)
+            if entry_user_id == author_id:
+                if now - ts < 48 * 3600:
+                    is_dup = True
+            else:
+                if now - ts < 72 * 3600:
+                    is_dup = True
+        if is_dup:
+            duplicate_found = True
+            continue
+        # Compose the message: mentions, cleaned text, link, and attribution
+        message_parts = []
+        if mention_str:
+            message_parts.append(mention_str)
+        if cleaned_content:
+            message_parts.append(cleaned_content)
+        message_parts.append(trans)
+        message_parts.append(f"(Posted by {author_mention} from {channel_mention})")
+        final_message = "\n".join([part for part in message_parts if part])
+        try:
+            await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message)
+            logger.info(f"Moved link to destination: {trans}")
+            moved_any = True
+            recent_links[norm_trans] = [now, event.message_id, author_id]
+        except hikari.ForbiddenError:
+            logger.error("Bot doesn't have permission to post in the destination channel")
+            print_permissions_guide()
+        except Exception as e:
+            logger.error(f"Error posting link to destination channel: {e}")
 
     if moved_any:
         save_recent_links()
