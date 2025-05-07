@@ -16,9 +16,6 @@ COPY . .
 # Create logs directory and ensure permissions (important for volume mounts)
 RUN mkdir -p logs && chmod -R 755 logs
 
-# Copy .env file (optional, if not using Docker environment variables)
-COPY .env .env
-
 # Set environment variables for Python
 ENV PYTHONUNBUFFERED=1
 
