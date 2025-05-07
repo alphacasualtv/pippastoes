@@ -10,10 +10,11 @@ A Discord bot that automatically monitors a specific channel for links, deletes 
 - Reposts the link to a designated channel with a reference to the source
 - Configurable through environment variables
 - Supports posting via Discord webhooks (alternative to direct bot posting)
+- **Ready for Docker, Portainer, and GitHub deployment**
 
 ## Prerequisites
 
-- Python 3.8 or higher
+- Python 3.8 or higher (for manual runs)
 - A Discord account
 - Permission to create and invite bots to a Discord server
 
@@ -51,7 +52,7 @@ If you prefer to use a webhook for posting links (instead of the bot posting dir
 5. Give the webhook a name and copy the webhook URL
 6. You'll use this URL in your .env file later
 
-### 4. Install the Bot
+### 4. Install the Bot (Manual Python)
 
 1. Clone this repository or download the files
 2. Create a virtual environment (recommended):
@@ -73,20 +74,57 @@ If you prefer to use a webhook for posting links (instead of the bot posting dir
    cp .env.example .env
    ```
 2. Open the `.env` file and replace the placeholder values:
-   - `DISCORD_BOT_TOKEN`: Your bot token from the Discord Developer Portal
+   - `BOT_TOKEN`: Your bot token from the Discord Developer Portal
    - `SOURCE_CHANNEL_ID`: The ID of the channel to monitor for links
-   - `LINK_CHANNEL_ID`: The ID of the channel where links will be reposted
-   - `WEBHOOK_URL`: (Optional) If you want to use a webhook for posting instead of the bot directly
+   - `DESTINATION_CHANNEL_ID`: The ID of the channel where links will be reposted
 
    > **How to get channel IDs**: In Discord, enable Developer Mode in Settings → Advanced, then right-click on a channel and select "Copy ID"
 
-### 6. Run the Bot
+### 6. Run the Bot (Manual Python)
 
 ```bash
-python main.py
+python link_mover_direct_channel.py
 ```
 
 If everything is set up correctly, you should see a message indicating that the bot has connected to Discord.
+
+## Docker & Portainer Deployment
+
+### 1. Build and Run with Docker Compose
+
+1. Ensure you have Docker and Docker Compose installed (or use Portainer).
+2. Copy `.env.example` to `.env` and fill in your secrets.
+3. Make sure you have a `logs/` directory in your project root:
+   ```bash
+   mkdir -p logs
+   ```
+4. Run:
+   ```bash
+   docker compose up --build -d
+   ```
+
+### 2. Persistent Data
+- All logs and persistent data (including `recent_links.json`) are stored in the `logs/` directory.
+- The following volume is mapped in `docker-compose.yml`:
+  ```yaml
+  volumes:
+    - ./logs:/app/logs
+  ```
+- This ensures that logs and recent links are preserved across container restarts.
+
+### 3. Permissions (Important for Portainer)
+- Ensure the `logs/` directory on your host is writable by the container user (UID/GID may be 1000:1000 or as set in the Dockerfile).
+- If you encounter permission errors, you can run:
+  ```bash
+  chmod -R 777 logs
+  ```
+  (or set more restrictive permissions as needed)
+
+### 4. Portainer
+- You can deploy this repository directly from GitHub in Portainer.
+- Set environment variables in the Portainer UI or mount your `.env` file.
+- Make sure the `logs/` volume is mapped as above.
+- The container runs as a non-root user for security.
 
 ## Usage
 
@@ -94,19 +132,6 @@ If everything is set up correctly, you should see a message indicating that the 
    - Delete the original message
    - Repost the link to the designated link channel with a note indicating where it came from
 2. The bot ignores messages without links and only processes messages from the configured source channel
-3. If a webhook URL is configured, the bot will use it to post links instead of posting directly
-
-## Webhook vs. Direct Bot Posting
-
-The bot supports two methods for posting links:
-
-1. **Direct Bot Posting** (default): The bot posts messages directly to the specified channel
-2. **Webhook Posting**: The bot sends messages through a Discord webhook
-
-Benefits of using a webhook:
-- Can customize the username and avatar for each message
-- Doesn't require "Send Messages" permission in the destination channel
-- Can be used alongside other bots that use the same webhook
 
 ## Troubleshooting
 
@@ -115,15 +140,7 @@ Benefits of using a webhook:
 - **Bot can't post messages**: Ensure the bot has the "Send Messages" permission in the link channel (or use a webhook instead)
 - **Bot doesn't detect links**: Make sure the link starts with http:// or https://
 - **Webhook isn't working**: Verify the webhook URL is correct and hasn't been deleted or revoked
-
-## Extending the Bot
-
-You can modify `main.py` to add more features:
-
-- Monitor multiple channels by adding more channel IDs
-- Customize the message format when reposting links
-- Add commands to configure the bot at runtime
-- Implement additional link processing (e.g., link shortening, metadata extraction)
+- **Permission errors in Docker/Portainer**: Ensure the `logs/` directory is writable by the container user
 
 ## License
 
