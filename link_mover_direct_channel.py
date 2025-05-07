@@ -490,14 +490,19 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
             return
 
         for original_url, transformed_url in url_pairs:
-            # Check for recent duplicate in destination channel
             norm_trans_url = normalize_link(transformed_url)
             entry = recent_links.get(norm_trans_url)
             is_dup = False
             if entry:
                 ts, orig_msg_id, entry_user_id = entry if len(entry) == 3 else (*entry, None)
-                if now - ts <= RECENT_LINKS_MAX_AGE:
-                    is_dup = True
+                if entry_user_id == author_id:
+                    # Self repost: block if within 48 hours
+                    if now - ts < 48 * 3600:
+                        is_dup = True
+                else:
+                    # Other user repost: block if within 72 hours
+                    if now - ts < 72 * 3600:
+                        is_dup = True
             if is_dup:
                 logger.info(f"Duplicate detected for {transformed_url} in destination channel, skipping move.")
                 continue
