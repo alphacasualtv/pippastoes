@@ -38,7 +38,7 @@ def save_recent_links():
     except PermissionError as e:
         logger.error(f"Failed to write to {RECENT_LINKS_FILE}: {e}")
         logger.warning("Continuing without saving recent links. This may cause duplicate detection issues.")
-        
+
 # Cleanup old links
 def cleanup_recent_links():
     now = time.time()
@@ -58,13 +58,12 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("logs/link_mover.log", encoding='utf-8')  # Updated log path
+        logging.FileHandler("logs/link_mover.log", encoding='utf-8')
     ]
 )
 logger = logging.getLogger("LinkMover")
 
 # ==== CONFIGURATION ====
-# These values are now loaded from environment variables for security and flexibility
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 try:
     SOURCE_CHANNEL_ID = int(os.getenv("SOURCE_CHANNEL_ID"))
@@ -80,23 +79,14 @@ if not BOT_TOKEN or not SOURCE_CHANNEL_ID or not DESTINATION_CHANNEL_ID:
 
 # Media file extensions to ignore (case insensitive)
 MEDIA_EXTENSIONS = {
-    # Images
     '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff',
-    # Videos
     '.mp4', '.webm', '.mov', '.avi', '.mkv', '.flv', '.m4v', '.gifv'
 }
 
 # Video hosting domains that should embed directly
 VIDEO_DOMAINS = {
-    'gfycat.com',
-    'streamable.com',
-    'v.redd.it',
-    'clips.twitch.tv',
-    'medal.tv',
-    'youtube.com/shorts',
-    'tenor.com',
-    'giphy.com',
-    'imgur.com'  # when it ends in .mp4 or .gifv
+    'gfycat.com', 'streamable.com', 'v.redd.it', 'clips.twitch.tv',
+    'medal.tv', 'youtube.com/shorts', 'tenor.com', 'giphy.com', 'imgur.com'
 }
 
 # URL transformations for better embedding
@@ -105,12 +95,12 @@ URL_TRANSFORMATIONS = {
     'pixiv.net': 'phixiv.net',
     'tiktok.com': 'vxtiktok.com',
     'x.com': 'fxtwitter.com',
-    'twitter.com': 'fxtwitter.com',  # Also handle twitter.com
+    'twitter.com': 'fxtwitter.com',
     'youtube.com': 'youtu.be',
     'bsky.app': 'bskx.app'
 }
 
-# URL regex pattern to detect links in messages - enhanced to better catch nested links
+# URL regex pattern to detect links
 URL_PATTERN = r'https?://(?:www\.)?([^/\s]+)([^\s<>"\']*)(?=[<>\s"\']|$)'
 
 # Snarky comments
@@ -140,7 +130,6 @@ SNARKY_COMMENTS = [
     "you just invented time travel: back to when this was first posted.",
     "I hope you're better at other things than reading chat.",
     "maybe next time, try being first.",
-    # 25 new snarky comments
     "You must think this link is a hidden gem. It's not.",
     "This link again? The suspense is killing no one.",
     "Reposting links won't make you popular.",
@@ -170,12 +159,12 @@ SNARKY_COMMENTS = [
 
 # Add a helper to detect short/mobile links that need expansion
 SHORT_LINK_PATTERNS = [
-    r"https?://(www\.)?reddit\.com/r/[^/]+/s/[A-Za-z0-9]+/?",  # Reddit mobile short (allow trailing slash)
-    r"https?://(www\.)?redd\.it/[A-Za-z0-9]+/?",              # Reddit short
-    r"https?://t\.co/[A-Za-z0-9]+/?",                         # Twitter short
-    r"https?://youtu\.be/[A-Za-z0-9_-]+/?",                   # YouTube short
-    r"https?://(www\.)?instagram\.com/s/[A-Za-z0-9]+/?",     # Instagram short
-    r"https?://(www\.)?ig\.me/[A-Za-z0-9]+/?",               # Instagram short
+    r"https?://(www\.)?reddit\.com/r/[^/]+/s/[A-Za-z0-9]+/?",
+    r"https?://(www\.)?redd\.it/[A-Za-z0-9]+/?",
+    r"https?://t\.co/[A-Za-z0-9]+/?",
+    r"https?://youtu\.be/[A-Za-z0-9_-]+/?",
+    r"https?://(www\.)?instagram\.com/s/[A-Za-z0-9]+/?",
+    r"https?://(www\.)?ig\.me/[A-Za-z0-9]+/?",
 ]
 
 def needs_expansion(url: str) -> bool:
@@ -187,7 +176,6 @@ def needs_expansion(url: str) -> bool:
     return False
 
 async def expand_url(url: str) -> str:
-    """Expand a short/mobile URL by following redirects. Returns the final URL or the original if expansion fails."""
     try:
         timeout = aiohttp.ClientTimeout(total=5)
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -197,7 +185,6 @@ async def expand_url(url: str) -> str:
         logger.warning(f"Failed to expand short URL {url}: {e}")
         return url
 
-# Update transform_url to handle expanded Reddit /s/ links
 async def transform_and_expand_url(url: str) -> str:
     logger.info(f"[DEBUG] Entering transform_and_expand_url for: {url}")
     logger.info(f"[DEBUG] Original URL: {url}")
@@ -213,18 +200,14 @@ async def transform_and_expand_url(url: str) -> str:
         logger.info(f"Transformed URL: {expanded_url} -> {transformed}")
     return transformed
 
-# Patch process_nested_links to be async and use transform_and_expand_url
 async def process_nested_links_async(content: str) -> str:
     async def replace_link_async(match):
         full_url = match.group(0)
         transformed = await transform_and_expand_url(full_url)
         return transformed if transformed else full_url
-    # Find and transform all URLs in the content
-    # Use re.finditer to get all matches, then replace them one by one
     matches = list(re.finditer(URL_PATTERN, content))
     if not matches:
         return content
-    # Replace from the end to avoid messing up indices
     new_content = content
     offset = 0
     for match in matches:
@@ -237,73 +220,46 @@ async def process_nested_links_async(content: str) -> str:
     return new_content
 
 def is_media_url(url: str) -> bool:
-    """Check if the URL is a direct link to media or a video platform that embeds well."""
     url_lower = url.lower()
-    
-    # Check for direct media file extensions
     if any(url_lower.endswith(ext) for ext in MEDIA_EXTENSIONS):
         logger.info(f"[DEBUG] is_media_url: {url} classified as media by extension")
         return True
-    
-    # Check for video hosting domains (excluding YouTube shorts)
     for domain in VIDEO_DOMAINS:
         if domain in url_lower and 'youtube.com/shorts' not in url_lower:
             logger.info(f"[DEBUG] is_media_url: {url} classified as media by domain {domain}")
             return True
-            
-    # Special checks for specific platforms
     if 'imgur.com' in url_lower and any(ext in url_lower for ext in ['.mp4', '.gifv']):
         logger.info(f"[DEBUG] is_media_url: {url} classified as media by imgur rule")
         return True
-    
-    # Remove YouTube shorts check since we want to transform these
-    
-    # Check for common video patterns
     video_patterns = [
-        r'gfycat\.com/[a-zA-Z]+$',  # Gfycat links
-        r'clips\.twitch\.tv/[a-zA-Z]+$',  # Twitch clips
-        r'v\.redd\.it/[a-zA-Z0-9]+$',  # Reddit videos
-        r'streamable\.com/[a-zA-Z0-9]+$',  # Streamable videos
-        r'medal\.tv/clips/[a-zA-Z0-9]+',  # Medal clips
-        r'tenor\.com/view/[a-zA-Z0-9-]+',  # Tenor GIFs
-        r'giphy\.com/gifs/[a-zA-Z0-9-]+',  # Giphy GIFs
+        r'gfycat\.com/[a-zA-Z]+$',
+        r'clips\.twitch\.tv/[a-zA-Z]+$',
+        r'v\.redd\.it/[a-zA-Z0-9]+$',
+        r'streamable\.com/[a-zA-Z0-9]+$',
+        r'medal\.tv/clips/[a-zA-Z0-9]+',
+        r'tenor\.com/view/[a-zA-Z0-9-]+',
+        r'giphy\.com/gifs/[a-zA-Z0-9-]+',
     ]
-    
     return any(re.search(pattern, url_lower) for pattern in video_patterns)
 
 def transform_url(url: str) -> str:
-    """Transform URLs to their embedding-friendly versions."""
-    # Don't transform media URLs
     if is_media_url(url):
-        return None  # Return None to indicate this URL should be skipped
-
+        return None
     match = re.match(URL_PATTERN, url)
     if not match:
         return url
-
     domain = match.group(1)
     path = match.group(2)
-
-    # New: Transform all Reddit links to vxreddit.com for embedding
     if 'reddit.com' in domain.lower():
-        clean_path = path.rstrip('/')  # Remove trailing slash if present
-        # Optionally log if it's a post link
+        clean_path = path.rstrip('/')
         if '/comments/' in clean_path:
             logger.info(f"Reddit post link detected: {url}")
-        # Rewrite all Reddit links to vxreddit.com
         return f'https://vxreddit.com{clean_path}'
-
-    # Special handling for Twitter/X domains
     if any(twitter_domain in domain for twitter_domain in ['twitter.com', 'x.com']):
-        # Remove any www. prefix if present
         clean_domain = domain.replace('www.', '')
-        # Replace either twitter.com or x.com with fxtwitter.com
         return f'https://fxtwitter.com{path}'
-
-    # Check if this domain needs transformation
     for original, replacement in URL_TRANSFORMATIONS.items():
         if original in domain:
-            # Special handling for YouTube
             if original == 'youtube.com':
                 if 'watch?v=' in path:
                     video_id = re.search(r'watch\?v=([^&\s]+)', path)
@@ -315,10 +271,8 @@ def transform_url(url: str) -> str:
                 elif '/live/' in path:
                     live_id = path.split('/live/')[1].split('?')[0]
                     return f'https://youtu.be/{live_id}'
-            # For all other transformations
             new_domain = domain.replace(original, replacement)
             return f'https://{new_domain}{path}'
-
     return url
 
 logger.info("==== Configuration ====")
@@ -331,7 +285,6 @@ intents = hikari.Intents.GUILD_MESSAGES | hikari.Intents.MESSAGE_CONTENT
 bot = hikari.GatewayBot(token=BOT_TOKEN, intents=intents)
 
 def print_permissions_guide():
-    """Print a guide for setting up bot permissions."""
     print("\n=== BOT PERMISSIONS GUIDE ===")
     print("The bot needs the following permissions in the DESTINATION channel:")
     print("1. View Channel")
@@ -354,45 +307,31 @@ def print_permissions_guide():
     print("=====================================")
 
 def extract_mentions(content: str) -> tuple[str, list[str]]:
-    """Extract mentions from message content and return cleaned content and list of mentions."""
-    # Discord mention pattern (both user and role mentions)
     mention_pattern = r'<@!?&?\d+>'
     mentions = re.findall(mention_pattern, content)
-    
-    # Remove mentions from content but preserve spacing
     cleaned_content = content
     for mention in mentions:
         cleaned_content = cleaned_content.replace(mention, '')
-    
-    # Clean up extra spaces
     cleaned_content = ' '.join(cleaned_content.split())
-    
     return cleaned_content, mentions
 
-# Create event listeners
 @bot.listen()
 async def on_ready(event: hikari.ShardReadyEvent) -> None:
-    """Event fired when the bot is ready to process events."""
     logger.info("==== Bot Ready ====")
     logger.info(f"Logged in as {bot.get_me().username}")
     logger.info(f"Bot ID: {bot.get_me().id}")
     logger.info(f"Monitoring source channel: {SOURCE_CHANNEL_ID}")
     logger.info(f"Posting links to channel: {DESTINATION_CHANNEL_ID}")
     logger.info("URL transformations enabled for: " + ", ".join(URL_TRANSFORMATIONS.keys()))
-    
-    # Verify the destination channel exists and bot has permissions
     try:
         channel = await bot.rest.fetch_channel(DESTINATION_CHANNEL_ID)
         logger.info(f"Successfully found destination channel: #{channel.name}")
-        
-        # Try to send a test message
         test_message = await bot.rest.create_message(
             DESTINATION_CHANNEL_ID,
             "Bot startup test message - will be deleted"
         )
         await bot.rest.delete_message(DESTINATION_CHANNEL_ID, test_message)
         logger.info("Successfully verified bot permissions in destination channel")
-        
     except hikari.ForbiddenError:
         logger.error("ERROR: Bot doesn't have permission to post in the destination channel!")
         print_permissions_guide()
@@ -406,17 +345,11 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
         logger.info("[DEBUG] Returning early: event is bot or content is empty.")
         return
     logger.info(f"[DEBUG] Raw message content: {event.content}")
-    
-    # Get message author information
     author = event.author
     author_name = author.username if author else "Unknown User"
     author_mention = f"<@{author.id}>" if author else "Unknown User"
     author_id = str(author.id) if author else None
-    
-    # Process content for nested links first (async)
     processed_content = await process_nested_links_async(event.content)
-    
-    # Extract all URLs from the processed message
     urls = re.findall(URL_PATTERN, processed_content)
     full_urls = [f"https://{domain}{path}" for domain, path in urls]
     logger.info(f"[DEBUG] URLs found in message: {full_urls}")
@@ -429,38 +362,28 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
         else:
             logger.info(f"[DEBUG] URL NOT flagged for expansion: {url}")
     normalized_urls = [normalize_link(url) for url in full_urls]
-    
-    # Cleanup old links before checking
     cleanup_recent_links()
     now = time.time()
-    
-    # Check for duplicates in both channels (original and transformed links)
     for orig_url in full_urls:
         norm_orig_url = normalize_link(orig_url)
         transformed_url = await transform_and_expand_url(orig_url)
         norm_trans_url = normalize_link(transformed_url) if transformed_url else None
-
-        # Check original
         is_dup = False
         dup_is_self = False
         entry = recent_links.get(norm_orig_url)
         if entry:
-            # Backward compatibility: [ts, msg_id] or [ts, msg_id, user_id]
             ts, orig_msg_id = entry[0], entry[1]
             entry_user_id = entry[2] if len(entry) > 2 else None
             if now - ts <= RECENT_LINKS_MAX_AGE:
                 if entry_user_id and author_id:
                     if author_id == entry_user_id:
-                        # Self repost: allow after 48h
                         if now - ts < 48 * 3600:
                             is_dup = True
                             dup_is_self = True
                     else:
                         is_dup = True
                 else:
-                    # Old format: treat as duplicate for all users
                     is_dup = True
-        # Check transformed (if different)
         if norm_trans_url and norm_trans_url != norm_orig_url:
             entry = recent_links.get(norm_trans_url)
             if entry:
@@ -482,13 +405,11 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
             except Exception as e:
                 logger.error(f"Error deleting duplicate message: {e}")
             try:
-                # Check if original message still exists
                 try:
                     orig_msg = await bot.rest.fetch_message(event.channel_id, orig_msg_id)
                 except hikari.NotFoundError:
-                    return  # Original message deleted, do nothing
+                    return
                 snarky_comment = random.choice(SNARKY_COMMENTS)
-                # Reply to the original message, @ the user, and include the snarky comment
                 await bot.rest.create_message(
                     event.channel_id,
                     f"{author_mention} {snarky_comment}",
@@ -496,9 +417,7 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
                 )
             except Exception as e:
                 logger.error(f"Error replying to original message: {e}")
-            return  # Only need to respond to the first duplicate found
-
-    # If not duplicate, add all normalized URLs (original and transformed) to the record
+            return
     for orig_url in full_urls:
         norm_orig_url = normalize_link(orig_url)
         transformed_url = await transform_and_expand_url(orig_url)
@@ -507,73 +426,44 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
         if norm_trans_url and norm_trans_url != norm_orig_url:
             recent_links[norm_trans_url] = [now, event.message_id, author_id]
     save_recent_links()
-
-    # Handle messages based on channel
     if event.channel_id == SOURCE_CHANNEL_ID:
-        # Original source channel handling
         urls = re.findall(URL_PATTERN, processed_content)
-        
         if urls:
             logger.info(f"Found {len(urls)} links in source channel")
             logger.info(f"Original content: {event.content}")
             logger.info(f"Processed content: {processed_content}")
-            
-            # Extract any mentions from the original message
             cleaned_content, mentions = extract_mentions(processed_content)
             mentions_str = ' '.join(mentions) if mentions else ''
-            
-            # Get channel name
             try:
                 source_channel = await bot.rest.fetch_channel(SOURCE_CHANNEL_ID)
                 source_channel_name = source_channel.name
             except Exception as e:
                 logger.error(f"Error fetching source channel name: {e}")
                 source_channel_name = f"channel-{SOURCE_CHANNEL_ID}"
-            
-            # Post links to destination channel
             success_count = 0
-            
-            # Reconstruct full URLs from regex matches and transform them
             full_urls = [f"https://{domain}{path}" for domain, path in urls]
-            
-            # First check if any URLs are direct media links
             if any(is_media_url(url) for url in full_urls):
                 logger.info("Message contains direct media links - keeping in original channel")
                 return
-            
-            # Transform non-media URLs
             transformed_urls = [await transform_and_expand_url(url) for url in full_urls]
-            
-            # Log URL transformations
             for orig, trans in zip(full_urls, transformed_urls):
                 if trans:
                     logger.info(f"URL Transformation: {orig} -> {trans}")
                 else:
                     logger.info(f"URL skipped (media content): {orig}")
-            
-            # Filter out None values (which indicate media links)
             url_pairs = [(orig, trans) for orig, trans in zip(full_urls, transformed_urls) if trans is not None]
-            
-            if not url_pairs:  # If all URLs were media or no valid URLs
+            if not url_pairs:
                 return
-                
             for original_url, transformed_url in url_pairs:
                 try:
-                    # Format the message with mentions first, then the link
-                    # Use zero-width space after mentions to ensure proper embedding
                     if mentions:
                         message_content = f"{mentions_str}\u200b{transformed_url}"
                         context_message = f"Link from #{source_channel_name} by {author_mention}"
                     else:
                         message_content = transformed_url
                         context_message = f"Link from #{source_channel_name} by {author_mention}"
-                        
-                    # Send context message first
                     await bot.rest.create_message(DESTINATION_CHANNEL_ID, context_message)
-                    
-                    # Send the link in a separate message for better embedding
                     await bot.rest.create_message(DESTINATION_CHANNEL_ID, message_content)
-                    
                     logger.info(f"Successfully moved link to destination channel: {transformed_url}")
                     success_count += 1
                 except hikari.ForbiddenError:
@@ -582,8 +472,6 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
                     return
                 except Exception as e:
                     logger.error(f"Error posting link to destination channel: {e}")
-            
-            # Delete the original message if at least one link was moved successfully
             if success_count > 0:
                 try:
                     await bot.rest.delete_message(SOURCE_CHANNEL_ID, event.message_id)
@@ -594,73 +482,45 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
                     logger.error(f"Error deleting original message: {e}")
             else:
                 logger.warning("No links were successfully moved, keeping original message")
-                
     elif event.channel_id == DESTINATION_CHANNEL_ID:
-        # Handle messages posted directly in destination channel
         urls = re.findall(URL_PATTERN, event.content)
-        
         if urls:
             logger.info(f"Found {len(urls)} links in destination channel")
-            
-            # Extract any mentions from the original message
             cleaned_content, mentions = extract_mentions(event.content)
             mentions_str = ' '.join(mentions) if mentions else ''
-            
-            # Reconstruct full URLs from regex matches
             full_urls = [f"https://{domain}{path}" for domain, path in urls]
-            
-            # Don't transform if it's a media URL
             if any(is_media_url(url) for url in full_urls):
                 logger.info("Message contains direct media links - keeping as is")
                 return
-                
-            # Transform non-media URLs
             transformed_urls = [await transform_and_expand_url(url) for url in full_urls]
-            
-            # Filter out None values and unchanged URLs
             url_pairs = [(orig, trans) for orig, trans in zip(full_urls, transformed_urls) 
                         if trans is not None and trans != orig]
-            
-            if url_pairs:  # If we have any URLs to transform
+            if url_pairs:
                 try:
-                    # Start with the original message content
                     new_content = event.content
-                    
-                    # Replace each URL with its transformed version
                     for original_url, transformed_url in url_pairs:
                         logger.info(f"Original URL: {original_url}")
                         logger.info(f"Transformed URL: {transformed_url}")
-                        # Make sure we're replacing the exact URL
                         if original_url in new_content:
                             new_content = new_content.replace(original_url, transformed_url)
                         else:
-                            # Try with www. version
                             www_url = original_url.replace('https://', 'https://www.')
                             if www_url in new_content:
                                 new_content = new_content.replace(www_url, transformed_url)
                         logger.info(f"Content after replacement: {new_content}")
-                    
-                    # Create the new message with all mentions at the start
                     if mentions:
-                        # Remove mentions from content and add them at the start
                         for mention in mentions:
                             new_content = new_content.replace(mention, '')
-                        # Clean up extra spaces
                         new_content = ' '.join(new_content.split())
                         new_message = f"{author_mention} {mentions_str}: {new_content}"
                     else:
                         new_message = f"{author_mention}: {new_content}"
-                    
-                    # Delete the original message first
                     await bot.rest.delete_message(DESTINATION_CHANNEL_ID, event.message_id)
-                    
-                    # Post the new message
                     await bot.rest.create_message(
                         DESTINATION_CHANNEL_ID,
                         new_message
                     )
                     logger.info("Successfully transformed links in destination channel message")
-                    
                 except hikari.ForbiddenError:
                     logger.error("Error: Bot doesn't have permission to manage messages in destination channel")
                 except Exception as e:
@@ -669,9 +529,7 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
 def main():
     logger.info("Starting Discord Link Mover Bot (Direct Channel Version)...")
     logger.info("Connecting to Discord...")
-    
     try:
-        # Run the bot
         bot.run()
     except Exception as e:
         logger.error(f"Error running bot: {e}")
@@ -679,4 +537,4 @@ def main():
         input()
 
 if __name__ == "__main__":
-    main() 
+    main()
