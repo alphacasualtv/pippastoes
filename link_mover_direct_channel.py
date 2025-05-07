@@ -425,24 +425,17 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     cleaned_content, mentions = extract_mentions(event.content)
     mention_str = " ".join(mentions) if mentions else ""
 
-    # --- Strict per-message deduplication: only post transformed links ---
-    # Map each original link to its transformed version
-    orig_to_trans = {}
+    # --- Strict per-message deduplication: only post unique transformed links ---
+    unique_transformed_links = {}
     for url in full_urls:
         transformed = await transform_and_expand_url(url)
-        # If transformation returns None (media), skip
         if transformed is None:
             continue
-        orig_to_trans[url] = transformed
-
-    # Only keep unique transformed links
-    unique_transformed = {}
-    for orig, trans in orig_to_trans.items():
-        norm_trans = normalize_link(trans.rstrip('/'))
-        unique_transformed[norm_trans] = trans  # Only the transformed version matters
+        norm_trans = normalize_link(transformed.rstrip('/'))
+        unique_transformed_links[norm_trans] = transformed
 
     # Phase 2: Check for global duplicates (any transformed link already posted)
-    for norm_trans, trans in unique_transformed.items():
+    for norm_trans, actual_url in unique_transformed_links.items():
         entry = recent_links.get(norm_trans)
         is_dup = False
         if entry:
@@ -474,7 +467,7 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     non_transformable_links = []
 
     # Phase 3: Post only unique, transformed links
-    for norm_trans, trans in unique_transformed.items():
+    for norm_trans, actual_url in unique_transformed_links.items():
         entry = recent_links.get(norm_trans)
         is_dup = False
         if entry:
@@ -494,12 +487,12 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
             message_parts.append(mention_str)
         if cleaned_content:
             message_parts.append(cleaned_content)
-        message_parts.append(trans)
+        message_parts.append(actual_url)
         message_parts.append(f"(Posted by {author_mention} from {channel_mention})")
         final_message = "\n".join([part for part in message_parts if part])
         try:
             await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message)
-            logger.info(f"Moved link to destination: {trans}")
+            logger.info(f"Moved link to destination: {actual_url}")
             moved_any = True
             recent_links[norm_trans] = [now, event.message_id, author_id]
         except hikari.ForbiddenError:
