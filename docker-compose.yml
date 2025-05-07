@@ -1,31 +1,20 @@
-# Use a modern, slim Python image
-FROM python:3.10-slim
-
-# Set working directory
-WORKDIR /app
-
-# Copy requirements.txt first to leverage Docker caching
-COPY requirements.txt .
-
-# Install dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Create non-root user
-RUN useradd -m botuser
-
-# Copy bot code and all necessary files
-COPY . .
-
-# Create logs and data directories, set ownership and permissions
-RUN mkdir -p logs data && \
-    chown -R botuser:botuser logs data && \
-    chmod -R 775 logs data
-
-# Set environment variables for Python
-ENV PYTHONUNBUFFERED=1
-
-# Switch to non-root user
-USER botuser
-
-# Expose no ports (Discord bots are outbound only)
-CMD ["python", "link_mover_direct_channel.py"]
+version: '3.8'
+services:
+  link-mover:
+    image: link-mover-bot
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - SOURCE_CHANNEL_ID=${SOURCE_CHANNEL_ID}
+      - DESTINATION_CHANNEL_ID=${DESTINATION_CHANNEL_ID}
+    volumes:
+      - link-mover-logs:/app/logs
+      - link-mover-data:/app/data
+    restart: unless-stopped
+volumes:
+  link-mover-logs:
+    name: link-mover-logs
+  link-mover-data:
+    name: link-mover-data
