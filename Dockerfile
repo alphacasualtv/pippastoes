@@ -19,10 +19,6 @@ RUN mkdir -p logs && chmod -R 755 logs
 # Set environment variables for Python
 ENV PYTHONUNBUFFERED=1
 
-# Run as non-root user for security
-RUN useradd -m botuser
-USER botuser
-
 # Expose no ports (Discord bots are outbound only)
 
 # Default command
