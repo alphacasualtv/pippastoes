@@ -192,13 +192,17 @@ async def expand_url(url: str) -> str:
 
 # Update transform_url to handle expanded Reddit /s/ links
 async def transform_and_expand_url(url: str) -> str:
+    logger.info(f"[DEBUG] Original URL: {url}")
     # If it's a short/mobile link, expand it first
     expanded_url = url
     if needs_expansion(url):
         expanded_url = await expand_url(url)
-        logger.info(f"Expanded short/mobile URL: {url} -> {expanded_url}")
+        logger.info(f"[DEBUG] Expanded URL: {expanded_url}")
+    else:
+        logger.info(f"[DEBUG] No expansion needed for: {url}")
     # Now apply the normal transformation logic
     transformed = transform_url(expanded_url)
+    logger.info(f"[DEBUG] Transformed URL: {transformed}")
     if transformed != expanded_url:
         logger.info(f"Transformed URL: {expanded_url} -> {transformed}")
     return transformed
