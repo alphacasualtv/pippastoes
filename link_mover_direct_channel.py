@@ -405,7 +405,8 @@ async def on_ready(event: hikari.ShardReadyEvent) -> None:
 
 @bot.listen()
 async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
-    if event.is_bot or not event.content:
+    # Only process messages from source or destination channel
+    if event.is_bot or not event.content or event.channel_id not in {SOURCE_CHANNEL_ID, DESTINATION_CHANNEL_ID}:
         return
 
     author = event.author
@@ -413,6 +414,11 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     author_id = str(author.id) if author else None
     channel_mention = f"<#{event.channel_id}>"
 
+    # Extract mentions and preserve formatting
+    cleaned_content, mentions = extract_mentions(event.content)
+    mention_str = " ".join(mentions) if mentions else ""
+
+    # Find all URLs in the message
     matches = list(re.finditer(URL_PATTERN, event.content))
     full_urls = [match.group(0) for match in matches]
     if not full_urls:
@@ -421,21 +427,20 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     cleanup_recent_links()
     now = time.time()
 
-    # Extract mentions and preserve formatting
-    cleaned_content, mentions = extract_mentions(event.content)
-    mention_str = " ".join(mentions) if mentions else ""
-
-    # --- Strict per-message deduplication: only post unique transformed links ---
-    unique_transformed_links = {}
+    # Build a mapping of original URL -> transformed URL (only if transformable)
+    url_replacements = {}
     for url in full_urls:
         transformed = await transform_and_expand_url(url)
-        if transformed is None:
-            continue
-        norm_trans = normalize_link(transformed.rstrip('/'))
-        unique_transformed_links[norm_trans] = transformed
+        if transformed and transformed != url:
+            url_replacements[url] = transformed
 
-    # Phase 2: Check for global duplicates (any transformed link already posted)
-    for norm_trans, actual_url in unique_transformed_links.items():
+    # If no transformable links, do nothing
+    if not url_replacements:
+        return
+
+    # Check for duplicates (using transformed links)
+    for orig_url, transformed_url in url_replacements.items():
+        norm_trans = normalize_link(transformed_url.rstrip('/'))
         entry = recent_links.get(norm_trans)
         is_dup = False
         if entry:
@@ -462,69 +467,46 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
                 logger.error(f"Error sending snarky comment: {e}")
             return  # Do not process further if any link is a duplicate
 
-    moved_any = False
-    duplicate_found = False
-    non_transformable_links = []
+    # Replace original links in the message content with their transformed versions
+    new_content = event.content
+    for orig_url, transformed_url in url_replacements.items():
+        new_content = new_content.replace(orig_url, transformed_url)
 
-    # Phase 3: Post only unique, transformed links
-    for norm_trans, actual_url in unique_transformed_links.items():
-        entry = recent_links.get(norm_trans)
-        is_dup = False
-        if entry:
-            ts, orig_msg_id, entry_user_id = entry if len(entry) == 3 else (*entry, None)
-            if entry_user_id == author_id:
-                if now - ts < 48 * 3600:
-                    is_dup = True
-            else:
-                if now - ts < 72 * 3600:
-                    is_dup = True
-        if is_dup:
-            duplicate_found = True
-            continue
-        # Compose the message: mentions, cleaned text, link, and attribution
-        message_parts = []
-        if mention_str:
-            message_parts.append(mention_str)
-        if cleaned_content:
-            message_parts.append(cleaned_content)
-        message_parts.append(actual_url)
-        message_parts.append(f"(Posted by {author_mention} from {channel_mention})")
-        final_message = "\n".join([part for part in message_parts if part])
-        try:
+    # Re-extract mentions to ensure they're at the start
+    cleaned_content, mentions = extract_mentions(new_content)
+    mention_str = " ".join(mentions) if mentions else ""
+    final_message = f"{mention_str} {cleaned_content}".strip()
+    if not final_message:
+        final_message = " ".join(url_replacements.values())
+
+    # Post the new message to the destination channel (if not already there)
+    try:
+        if event.channel_id == SOURCE_CHANNEL_ID:
             await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message)
-            logger.info(f"Moved link to destination: {actual_url}")
-            moved_any = True
-            recent_links[norm_trans] = [now, event.message_id, author_id]
-        except hikari.ForbiddenError:
-            logger.error("Bot doesn't have permission to post in the destination channel")
-            print_permissions_guide()
-        except Exception as e:
-            logger.error(f"Error posting link to destination channel: {e}")
-
-    if moved_any:
-        save_recent_links()
-
-    if non_transformable_links and moved_any:
-        try:
-            await bot.rest.add_reaction(event.channel_id, event.message_id, "❓")
-            logger.info(f"Reacted to message {event.message_id} with ❓ for non-transformable links.")
-        except Exception as e:
-            logger.warning(f"Failed to add reaction: {e}")
-
-    if moved_any:
-        try:
+            logger.info(f"[DEBUG] Posted transformed message to destination: {final_message}")
+            # Save recent links
+            for transformed_url in url_replacements.values():
+                norm_trans = normalize_link(transformed_url.rstrip('/'))
+                recent_links[norm_trans] = [now, event.message_id, author_id]
+            save_recent_links()
+            # Delete the original message
             await bot.rest.delete_message(event.channel_id, event.message_id)
-            logger.info(f"Deleted original message {event.message_id} after moving links.")
-        except hikari.ForbiddenError:
-            logger.error("Bot doesn't have permission to delete messages in channel")
-        except Exception as e:
-            logger.error(f"Error deleting original message: {e}")
-    elif non_transformable_links and duplicate_found:
-        try:
-            await bot.rest.add_reaction(event.channel_id, event.message_id, "❓")
-            logger.info(f"Reacted to message {event.message_id} with ❓ for non-transformable links (all transformable were duplicates).")
-        except Exception as e:
-            logger.warning(f"Failed to add reaction: {e}")
+            logger.info(f"[DEBUG] Deleted original message after moving links.")
+        elif event.channel_id == DESTINATION_CHANNEL_ID:
+            # Only transform and repost if the message contains transformable links
+            await bot.rest.delete_message(event.channel_id, event.message_id)
+            await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message)
+            logger.info(f"[DEBUG] Transformed and reposted message in destination channel: {final_message}")
+            # Save recent links
+            for transformed_url in url_replacements.values():
+                norm_trans = normalize_link(transformed_url.rstrip('/'))
+                recent_links[norm_trans] = [now, event.message_id, author_id]
+            save_recent_links()
+    except hikari.ForbiddenError:
+        logger.error("Bot doesn't have permission to post or delete in the destination channel")
+        print_permissions_guide()
+    except Exception as e:
+        logger.error(f"Error posting or deleting message: {e}")
 
 def main():
     logger.info("Starting Discord Link Mover Bot (Direct Channel Version)...")
