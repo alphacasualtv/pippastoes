@@ -16,10 +16,10 @@ RUN useradd -m botuser
 # Copy bot code and all necessary files
 COPY . .
 
-# Create logs directory and set ownership/permissions for logs and /app
-RUN mkdir -p logs && \
-    chown -R botuser:botuser /app && \
-    chmod -R 775 /app
+# Create logs and data directories, set ownership and permissions
+RUN mkdir -p logs data && \
+    chown -R botuser:botuser logs data && \
+    chmod -R 775 logs data
 
 # Set environment variables for Python
 ENV PYTHONUNBUFFERED=1
