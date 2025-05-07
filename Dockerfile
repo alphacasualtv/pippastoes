@@ -10,14 +10,14 @@ COPY requirements.txt .
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Create non-root user
+RUN useradd -m botuser
+
 # Copy bot code and all necessary files
 COPY . .
 
 # Create logs directory, set ownership and permissions
 RUN mkdir -p logs && chown -R botuser:botuser logs && chmod -R 775 logs
-
-# Create non-root user
-RUN useradd -m botuser
 
 # Set environment variables for Python
 ENV PYTHONUNBUFFERED=1
