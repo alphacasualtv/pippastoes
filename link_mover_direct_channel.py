@@ -7,6 +7,7 @@ import hikari
 import logging
 import random
 from dotenv import load_dotenv
+import aiohttp
 
 # Load environment variables from .env file
 load_dotenv()
@@ -162,6 +163,69 @@ SNARKY_COMMENTS = [
     "This link is the chat's broken record."
 ]
 
+# Add a helper to detect short/mobile links that need expansion
+SHORT_LINK_PATTERNS = [
+    r"https?://(www\.)?reddit\.com/r/[^/]+/s/[A-Za-z0-9]+",  # Reddit mobile short
+    r"https?://(www\.)?redd\.it/[A-Za-z0-9]+",              # Reddit short
+    r"https?://t\.co/[A-Za-z0-9]+",                         # Twitter short
+    r"https?://youtu\.be/[A-Za-z0-9_-]+",                   # YouTube short
+    r"https?://(www\.)?instagram\.com/s/[A-Za-z0-9]+",     # Instagram short
+    r"https?://(www\.)?ig\.me/[A-Za-z0-9]+",               # Instagram short
+]
+
+def needs_expansion(url: str) -> bool:
+    for pattern in SHORT_LINK_PATTERNS:
+        if re.match(pattern, url):
+            return True
+    return False
+
+async def expand_url(url: str) -> str:
+    """Expand a short/mobile URL by following redirects. Returns the final URL or the original if expansion fails."""
+    try:
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.head(url, allow_redirects=True) as resp:
+                return str(resp.url)
+    except Exception as e:
+        logger.warning(f"Failed to expand short URL {url}: {e}")
+        return url
+
+# Update transform_url to handle expanded Reddit /s/ links
+async def transform_and_expand_url(url: str) -> str:
+    # If it's a short/mobile link, expand it first
+    expanded_url = url
+    if needs_expansion(url):
+        expanded_url = await expand_url(url)
+        logger.info(f"Expanded short/mobile URL: {url} -> {expanded_url}")
+    # Now apply the normal transformation logic
+    transformed = transform_url(expanded_url)
+    if transformed != expanded_url:
+        logger.info(f"Transformed URL: {expanded_url} -> {transformed}")
+    return transformed
+
+# Patch process_nested_links to be async and use transform_and_expand_url
+async def process_nested_links_async(content: str) -> str:
+    async def replace_link_async(match):
+        full_url = match.group(0)
+        transformed = await transform_and_expand_url(full_url)
+        return transformed if transformed else full_url
+    # Find and transform all URLs in the content
+    # Use re.finditer to get all matches, then replace them one by one
+    matches = list(re.finditer(URL_PATTERN, content))
+    if not matches:
+        return content
+    # Replace from the end to avoid messing up indices
+    new_content = content
+    offset = 0
+    for match in matches:
+        start, end = match.start() + offset, match.end() + offset
+        full_url = match.group(0)
+        transformed = await transform_and_expand_url(full_url)
+        if transformed and transformed != full_url:
+            new_content = new_content[:start] + transformed + new_content[end:]
+            offset += len(transformed) - (end - start)
+    return new_content
+
 def is_media_url(url: str) -> bool:
     """Check if the URL is a direct link to media or a video platform that embeds well."""
     url_lower = url.lower()
@@ -243,16 +307,6 @@ def transform_url(url: str) -> str:
             return f'https://{new_domain}{path}'
 
     return url
-
-def process_nested_links(content: str) -> str:
-    """Process content to transform any nested links while preserving the main content structure."""
-    def replace_link(match):
-        full_url = match.group(0)
-        transformed = transform_url(full_url)
-        return transformed if transformed else full_url
-    
-    # Find and transform all URLs in the content
-    return re.sub(URL_PATTERN, replace_link, content)
 
 logger.info("==== Configuration ====")
 logger.info("Configuration loaded from environment variables.")
@@ -345,8 +399,8 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     author_mention = f"<@{author.id}>" if author else "Unknown User"
     author_id = str(author.id) if author else None
     
-    # Process content for nested links first
-    processed_content = process_nested_links(event.content)
+    # Process content for nested links first (async)
+    processed_content = await process_nested_links_async(event.content)
     
     # Extract all URLs from the processed message
     urls = re.findall(URL_PATTERN, processed_content)
@@ -360,7 +414,7 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     # Check for duplicates in both channels (original and transformed links)
     for orig_url in full_urls:
         norm_orig_url = normalize_link(orig_url)
-        transformed_url = transform_url(orig_url)
+        transformed_url = await transform_and_expand_url(orig_url)
         norm_trans_url = normalize_link(transformed_url) if transformed_url else None
 
         # Check original
@@ -424,7 +478,7 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     # If not duplicate, add all normalized URLs (original and transformed) to the record
     for orig_url in full_urls:
         norm_orig_url = normalize_link(orig_url)
-        transformed_url = transform_url(orig_url)
+        transformed_url = await transform_and_expand_url(orig_url)
         norm_trans_url = normalize_link(transformed_url) if transformed_url else None
         recent_links[norm_orig_url] = [now, event.message_id, author_id]
         if norm_trans_url and norm_trans_url != norm_orig_url:
@@ -465,7 +519,7 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
                 return
             
             # Transform non-media URLs
-            transformed_urls = [transform_url(url) for url in full_urls]
+            transformed_urls = [await transform_and_expand_url(url) for url in full_urls]
             
             # Log URL transformations
             for orig, trans in zip(full_urls, transformed_urls):
@@ -538,7 +592,7 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
                 return
                 
             # Transform non-media URLs
-            transformed_urls = [transform_url(url) for url in full_urls]
+            transformed_urls = [await transform_and_expand_url(url) for url in full_urls]
             
             # Filter out None values and unchanged URLs
             url_pairs = [(orig, trans) for orig, trans in zip(full_urls, transformed_urls) 
