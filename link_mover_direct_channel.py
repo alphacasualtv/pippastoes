@@ -16,7 +16,7 @@ load_dotenv()
 os.makedirs('logs', exist_ok=True)
 
 # Persistent storage for recent links
-RECENT_LINKS_FILE = 'recent_links.json'
+RECENT_LINKS_FILE = 'data/recent_links.json'
 RECENT_LINKS_MAX_AGE = 72 * 3600  # 72 hours in seconds
 
 # Load or initialize recent links
@@ -31,8 +31,13 @@ else:
 
 # Helper to save recent links
 def save_recent_links():
-    with open(RECENT_LINKS_FILE, 'w') as f:
-        json.dump(recent_links, f)
+    try:
+        os.makedirs(os.path.dirname(RECENT_LINKS_FILE), exist_ok=True)
+        with open(RECENT_LINKS_FILE, 'w') as f:
+            json.dump(recent_links, f)
+    except PermissionError as e:
+        logger.error(f"Failed to write to {RECENT_LINKS_FILE}: {e}")
+        logger.warning("Continuing without saving recent links. This may cause duplicate detection issues.")
 
 # Cleanup old links
 def cleanup_recent_links():
