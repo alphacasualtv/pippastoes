@@ -280,13 +280,15 @@ def transform_url(url: str) -> str:
     path = match.group(2)
 
     # New: Transform all Reddit links to vxreddit.com for embedding
-    if 'reddit.com' in domain.lower():
+    if 'reddit.com' in domain.lower() or 'vxreddit.com' in domain.lower():
         clean_path = path.rstrip('/')  # Remove trailing slash if present
-        # Optionally log if it's a post link
+        # Only keep the path up to the post (strip query params)
         if '/comments/' in clean_path:
-            logger.info(f"Reddit post link detected: {url}")
-        # Rewrite all Reddit links to vxreddit.com
-        return f'https://vxreddit.com{clean_path}'
+            clean_path = clean_path.split('?')[0]
+            logger.info(f"[DEBUG] Cleaned Reddit/vxreddit link: https://vxreddit.com{clean_path}")
+            return f'https://vxreddit.com{clean_path}'
+        # For subreddit or other Reddit URLs, keep as is for proper embedding
+        return f'https://reddit.com{clean_path}'
 
     # Special handling for Twitter/X domains
     if any(twitter_domain in domain for twitter_domain in ['twitter.com', 'x.com']):
