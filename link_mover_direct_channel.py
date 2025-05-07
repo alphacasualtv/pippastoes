@@ -405,88 +405,87 @@ async def on_ready(event: hikari.ShardReadyEvent) -> None:
 
 @bot.listen()
 async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
-    logger.info(f"[DEBUG] on_message handler called for message_id={getattr(event, 'message_id', None)}")
+    # No debug logs for entry/exit, only major actions
     if event.is_bot or not event.content:
-        logger.info("[DEBUG] Returning early: event is bot or content is empty.")
         return
-    logger.info(f"[DEBUG] Raw message content: {event.content}")
 
     author = event.author
     author_mention = f"<@{author.id}>" if author else "Unknown User"
     author_id = str(author.id) if author else None
 
-    # Extract all URLs from the message
     matches = list(re.finditer(URL_PATTERN, event.content))
     full_urls = [match.group(0) for match in matches]
-    logger.info(f"[DEBUG] URLs found in message: {full_urls}")
     if not full_urls:
-        logger.info("[DEBUG] No URLs found in message. Returning early.")
         return
 
-    # Cleanup old links before checking
     cleanup_recent_links()
     now = time.time()
 
-    # Track if any embeddable links were processed
-    embeddable_found = False
+    transformable_links = []
+    non_transformable_links = []
+    moved_any = False
+    duplicate_found = False
 
     for url in full_urls:
-        logger.info(f"[DEBUG] Processing URL: {url}")
-        # Transform and expand
         transformed = await transform_and_expand_url(url)
-        logger.info(f"[DEBUG] Transformed URL: {transformed}")
-        if not transformed:
-            logger.info(f"[DEBUG] Skipping media or invalid link: {url}")
-            continue
-        # Normalize for duplicate check (case-insensitive, strip trailing slash)
-        norm_trans_url = normalize_link(transformed.rstrip('/'))
-        entry = recent_links.get(norm_trans_url)
-        is_dup = False
-        if entry:
-            ts, orig_msg_id, entry_user_id = entry if len(entry) == 3 else (*entry, None)
-            if entry_user_id == author_id:
-                if now - ts < 48 * 3600:
-                    is_dup = True
-            else:
-                if now - ts < 72 * 3600:
-                    is_dup = True
-        if is_dup:
-            logger.info(f"[DEBUG] Duplicate detected for {transformed} (user: {author_id}), skipping move.")
-            continue
-        # Post to destination
+        if transformed and transformed != url:
+            norm_trans_url = normalize_link(transformed.rstrip('/'))
+            entry = recent_links.get(norm_trans_url)
+            is_dup = False
+            if entry:
+                ts, orig_msg_id, entry_user_id = entry if len(entry) == 3 else (*entry, None)
+                if entry_user_id == author_id:
+                    if now - ts < 48 * 3600:
+                        is_dup = True
+                else:
+                    if now - ts < 72 * 3600:
+                        is_dup = True
+            if is_dup:
+                duplicate_found = True
+                continue
+            transformable_links.append((url, transformed))
+        else:
+            non_transformable_links.append(url)
+
+    for orig_url, transformed in transformable_links:
         try:
             context_message = f"Link from <#{event.channel_id}> by {author_mention}"
             await bot.rest.create_message(DESTINATION_CHANNEL_ID, context_message)
             await bot.rest.create_message(DESTINATION_CHANNEL_ID, transformed)
-            logger.info(f"[DEBUG] Posted link to destination: {transformed}")
-            embeddable_found = True
-            # Record the moved link
+            logger.info(f"Moved link to destination: {transformed}")
+            moved_any = True
+            norm_trans_url = normalize_link(transformed.rstrip('/'))
             recent_links[norm_trans_url] = [now, event.message_id, author_id]
         except hikari.ForbiddenError:
-            logger.error("[DEBUG] Bot doesn't have permission to post in the destination channel")
+            logger.error("Bot doesn't have permission to post in the destination channel")
             print_permissions_guide()
         except Exception as e:
-            logger.error(f"[DEBUG] Error posting link to destination channel: {e}")
+            logger.error(f"Error posting link to destination channel: {e}")
 
-    # If any embeddable links were processed, delete the original message
-    if embeddable_found:
-        try:
-            await bot.rest.delete_message(event.channel_id, event.message_id)
-            logger.info("[DEBUG] Deleted original message containing embeddable links")
-        except hikari.ForbiddenError:
-            logger.error("[DEBUG] Bot doesn't have permission to delete messages in channel")
-        except Exception as e:
-            logger.error(f"[DEBUG] Error deleting original message: {e}")
+    if moved_any:
         save_recent_links()
-    else:
-        # If only media or invalid links, just delete and log
+
+    if non_transformable_links and moved_any:
+        try:
+            await bot.rest.add_reaction(event.channel_id, event.message_id, "❓")
+            logger.info(f"Reacted to message {event.message_id} with ❓ for non-transformable links.")
+        except Exception as e:
+            logger.warning(f"Failed to add reaction: {e}")
+
+    if moved_any:
         try:
             await bot.rest.delete_message(event.channel_id, event.message_id)
-            logger.info("[DEBUG] Deleted original message containing only media or invalid links")
+            logger.info(f"Deleted original message {event.message_id} after moving links.")
         except hikari.ForbiddenError:
-            logger.error("[DEBUG] Bot doesn't have permission to delete messages in channel")
+            logger.error("Bot doesn't have permission to delete messages in channel")
         except Exception as e:
-            logger.error(f"[DEBUG] Error deleting original message: {e}")
+            logger.error(f"Error deleting original message: {e}")
+    elif non_transformable_links and duplicate_found:
+        try:
+            await bot.rest.add_reaction(event.channel_id, event.message_id, "❓")
+            logger.info(f"Reacted to message {event.message_id} with ❓ for non-transformable links (all transformable were duplicates).")
+        except Exception as e:
+            logger.warning(f"Failed to add reaction: {e}")
 
 def main():
     logger.info("Starting Discord Link Mover Bot (Direct Channel Version)...")
