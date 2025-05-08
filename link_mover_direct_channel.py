@@ -416,7 +416,7 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
 
     # Extract mentions and preserve formatting
     cleaned_content, mentions = extract_mentions(event.content)
-    mention_str = " ".join(mentions) if mentions else ""
+    mention_str = " ".join([author_mention] + mentions) if mentions else author_mention
 
     # Find all URLs in the message
     matches = list(re.finditer(URL_PATTERN, event.content))
@@ -427,20 +427,40 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     cleanup_recent_links()
     now = time.time()
 
-    # Build a mapping of original URL -> transformed URL (only if transformable)
+    # Classify links: reddit images/gifs, reddit videos, other links
+    reddit_image_domains = ["i.redd.it", "preview.redd.it"]
+    reddit_image_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
+    reddit_gif_exts = [".gif", ".gifv"]
+    reddit_video_domains = ["v.redd.it"]
+    reddit_images = []
+    reddit_gifs = []
+    reddit_videos = []
+    other_links = []
     url_replacements = {}
     for url in full_urls:
-        transformed = await transform_and_expand_url(url)
-        if transformed and transformed != url:
-            url_replacements[url] = transformed
+        url_lower = url.lower()
+        domain_match = re.match(URL_PATTERN, url)
+        domain = domain_match.group(1) if domain_match else ""
+        # Reddit image/gif
+        if any(domain.endswith(d) for d in reddit_image_domains) and any(url_lower.endswith(ext) for ext in reddit_image_exts + reddit_gif_exts):
+            if any(url_lower.endswith(ext) for ext in reddit_gif_exts):
+                reddit_gifs.append(url)
+            else:
+                reddit_images.append(url)
+        # Reddit video
+        elif any(d in domain for d in reddit_video_domains):
+            transformed = await transform_and_expand_url(url)
+            if transformed and transformed != url:
+                reddit_videos.append(transformed)
+        else:
+            transformed = await transform_and_expand_url(url)
+            if transformed and transformed != url:
+                other_links.append(transformed)
 
-    # If no transformable links, do nothing
-    if not url_replacements:
-        return
-
-    # Check for duplicates (using transformed links)
-    for orig_url, transformed_url in url_replacements.items():
-        norm_trans = normalize_link(transformed_url.rstrip('/'))
+    # Check for duplicates (using all transformed links and direct images)
+    all_check_links = reddit_images + reddit_gifs + reddit_videos + other_links
+    for check_url in all_check_links:
+        norm_trans = normalize_link(check_url.rstrip('/'))
         entry = recent_links.get(norm_trans)
         is_dup = False
         if entry:
@@ -467,39 +487,72 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
                 logger.error(f"Error sending snarky comment: {e}")
             return  # Do not process further if any link is a duplicate
 
-    # Replace original links in the message content with their transformed versions
-    new_content = event.content
-    for orig_url, transformed_url in url_replacements.items():
-        new_content = new_content.replace(orig_url, transformed_url)
+    # Compose message content
+    text_content = cleaned_content.strip()
+    if text_content:
+        final_message = f"{mention_str} {text_content}".strip()
+    else:
+        final_message = mention_str
 
-    # Re-extract mentions to ensure they're at the start
-    cleaned_content, mentions = extract_mentions(new_content)
-    mention_str = " ".join(mentions) if mentions else ""
-    final_message = f"{mention_str} {cleaned_content}".strip()
-    if not final_message:
-        final_message = " ".join(url_replacements.values())
+    # Prepare embeds for images/gifs
+    embeds = []
+    for img_url in reddit_images:
+        embeds.append(hikari.Embed().set_image(img_url))
+    for gif_url in reddit_gifs:
+        embeds.append(hikari.Embed().set_image(gif_url))
+    # Discord allows up to 10 embeds per message
+    embeds = embeds[:10]
+
+    # Add transformed links (videos, other links) to the message content
+    link_lines = []
+    if reddit_videos:
+        link_lines.extend(reddit_videos)
+    if other_links:
+        link_lines.extend(other_links)
+    if link_lines:
+        final_message = f"{final_message}\n" + "\n".join(link_lines)
 
     # Post the new message to the destination channel (if not already there)
     try:
         if event.channel_id == SOURCE_CHANNEL_ID:
-            await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message)
+            # Post the message and get the created message object
+            created_message = await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message, embeds=embeds if embeds else None)
             logger.info(f"[DEBUG] Posted transformed message to destination: {final_message}")
             # Save recent links
-            for transformed_url in url_replacements.values():
-                norm_trans = normalize_link(transformed_url.rstrip('/'))
+            for check_url in all_check_links:
+                norm_trans = normalize_link(check_url.rstrip('/'))
                 recent_links[norm_trans] = [now, event.message_id, author_id]
             save_recent_links()
             # Delete the original message
             await bot.rest.delete_message(event.channel_id, event.message_id)
             logger.info(f"[DEBUG] Deleted original message after moving links.")
+
+            # === VXREDDIT EMBED CHECK AND CORRECTION ===
+            vxreddit_links = [url for url in reddit_videos if url.startswith('https://vxreddit.com')]
+            if vxreddit_links:
+                await asyncio.sleep(3)  # Wait for embed to load
+                try:
+                    msg = await bot.rest.fetch_message(DESTINATION_CHANNEL_ID, created_message.id)
+                    failed = False
+                    if msg.embeds:
+                        for embed in msg.embeds:
+                            if (embed.title and 'failed to get data from reddit' in embed.title.lower()) or \
+                               (embed.description and 'failed to get data from reddit' in embed.description.lower()) or \
+                               any('failed to get data from reddit' in (f.value or '').lower() for f in getattr(embed, 'fields', [])):
+                                failed = True
+                                break
+                    if failed:
+                        corrected_message = final_message.replace('vxreddit.com', 'rxddit.com')
+                        await bot.rest.edit_message(DESTINATION_CHANNEL_ID, created_message.id, corrected_message)
+                        logger.info(f"[DEBUG] Edited message to use rxddit.com due to vxreddit embed failure: {corrected_message}")
+                except Exception as e:
+                    logger.error(f"[VXREDDIT CHECK] Error during vxreddit embed check or correction: {e}")
         elif event.channel_id == DESTINATION_CHANNEL_ID:
-            # Only transform and repost if the message contains transformable links
             await bot.rest.delete_message(event.channel_id, event.message_id)
-            await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message)
+            await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message, embeds=embeds if embeds else None)
             logger.info(f"[DEBUG] Transformed and reposted message in destination channel: {final_message}")
-            # Save recent links
-            for transformed_url in url_replacements.values():
-                norm_trans = normalize_link(transformed_url.rstrip('/'))
+            for check_url in all_check_links:
+                norm_trans = normalize_link(check_url.rstrip('/'))
                 recent_links[norm_trans] = [now, event.message_id, author_id]
             save_recent_links()
     except hikari.ForbiddenError:
