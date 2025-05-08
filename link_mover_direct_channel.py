@@ -432,11 +432,11 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     reddit_image_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
     reddit_gif_exts = [".gif", ".gifv"]
     reddit_video_domains = ["v.redd.it"]
+    allowed_transform_domains = list(URL_TRANSFORMATIONS.keys())
     reddit_images = []
     reddit_gifs = []
     reddit_videos = []
     other_links = []
-    url_replacements = {}
     for url in full_urls:
         url_lower = url.lower()
         domain_match = re.match(URL_PATTERN, url)
@@ -452,10 +452,17 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
             transformed = await transform_and_expand_url(url)
             if transformed and transformed != url:
                 reddit_videos.append(transformed)
-        else:
+        # Allowed transformation domains
+        elif any(allowed_domain in domain for allowed_domain in allowed_transform_domains):
             transformed = await transform_and_expand_url(url)
             if transformed and transformed != url:
                 other_links.append(transformed)
+        # Otherwise, skip (not allowed)
+        else:
+            continue
+    # If no allowed links, ignore the message
+    if not (reddit_images or reddit_gifs or reddit_videos or other_links):
+        return
 
     # Check for duplicates (using all transformed links and direct images)
     all_check_links = reddit_images + reddit_gifs + reddit_videos + other_links
