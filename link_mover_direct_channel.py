@@ -437,6 +437,8 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     reddit_gifs = []
     reddit_videos = []
     other_links = []
+    # Build a mapping of original URL -> transformed URL for allowed links
+    url_replacements = {}
     for url in full_urls:
         url_lower = url.lower()
         domain_match = re.match(URL_PATTERN, url)
@@ -452,11 +454,13 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
             transformed = await transform_and_expand_url(url)
             if transformed and transformed != url:
                 reddit_videos.append(transformed)
+                url_replacements[url] = transformed
         # Allowed transformation domains
         elif any(allowed_domain in domain for allowed_domain in allowed_transform_domains):
             transformed = await transform_and_expand_url(url)
             if transformed and transformed != url:
                 other_links.append(transformed)
+                url_replacements[url] = transformed
         # Otherwise, skip (not allowed)
         else:
             continue
@@ -464,37 +468,14 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     if not (reddit_images or reddit_gifs or reddit_videos or other_links):
         return
 
-    # Check for duplicates (using all transformed links and direct images)
-    all_check_links = reddit_images + reddit_gifs + reddit_videos + other_links
-    for check_url in all_check_links:
-        norm_trans = normalize_link(check_url.rstrip('/'))
-        entry = recent_links.get(norm_trans)
-        is_dup = False
-        if entry:
-            ts, orig_msg_id, entry_user_id = entry if len(entry) == 3 else (*entry, None)
-            if entry_user_id == author_id:
-                if now - ts < 48 * 3600:
-                    is_dup = True
-            else:
-                if now - ts < 72 * 3600:
-                    is_dup = True
-        if is_dup:
-            # Delete the message and send a snarky comment
-            try:
-                await bot.rest.delete_message(event.channel_id, event.message_id)
-            except Exception as e:
-                logger.error(f"Error deleting duplicate message: {e}")
-            try:
-                snarky_comment = random.choice(SNARKY_COMMENTS)
-                await bot.rest.create_message(
-                    event.channel_id,
-                    f"{author_mention} {snarky_comment}"
-                )
-            except Exception as e:
-                logger.error(f"Error sending snarky comment: {e}")
-            return  # Do not process further if any link is a duplicate
+    # Replace allowed links in the original message with their transformed versions
+    new_content = event.content
+    for orig_url, transformed_url in url_replacements.items():
+        new_content = new_content.replace(orig_url, transformed_url)
 
-    # Compose message content
+    # Extract mentions and preserve formatting
+    cleaned_content, mentions = extract_mentions(new_content)
+    mention_str = " ".join([author_mention] + mentions) if mentions else author_mention
     text_content = cleaned_content.strip()
     if text_content:
         final_message = f"{mention_str} {text_content}".strip()
@@ -510,15 +491,6 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     # Discord allows up to 10 embeds per message
     embeds = embeds[:10]
 
-    # Add transformed links (videos, other links) to the message content
-    link_lines = []
-    if reddit_videos:
-        link_lines.extend(reddit_videos)
-    if other_links:
-        link_lines.extend(other_links)
-    if link_lines:
-        final_message = f"{final_message}\n" + "\n".join(link_lines)
-
     # Post the new message to the destination channel (if not already there)
     try:
         if event.channel_id == SOURCE_CHANNEL_ID:
@@ -526,7 +498,7 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
             created_message = await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message, embeds=embeds if embeds else None)
             logger.info(f"[DEBUG] Posted transformed message to destination: {final_message}")
             # Save recent links
-            for check_url in all_check_links:
+            for check_url in url_replacements.values():
                 norm_trans = normalize_link(check_url.rstrip('/'))
                 recent_links[norm_trans] = [now, event.message_id, author_id]
             save_recent_links()
@@ -558,7 +530,7 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
             await bot.rest.delete_message(event.channel_id, event.message_id)
             await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message, embeds=embeds if embeds else None)
             logger.info(f"[DEBUG] Transformed and reposted message in destination channel: {final_message}")
-            for check_url in all_check_links:
+            for check_url in url_replacements.values():
                 norm_trans = normalize_link(check_url.rstrip('/'))
                 recent_links[norm_trans] = [now, event.message_id, author_id]
             save_recent_links()
