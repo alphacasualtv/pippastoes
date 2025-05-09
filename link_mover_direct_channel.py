@@ -443,45 +443,157 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     author = event.author
     author_mention = f"<@{author.id}>" if author else "Unknown User"
     author_id = str(author.id) if author else None
-    channel_mention = f"<#{event.channel_id}>"
     # Only process the first allowed link
-    first_allowed_link = await process_first_allowed_link(event.content)
+    matches = list(re.finditer(URL_PATTERN, event.content))
+    first_allowed_link = None
+    for match in matches:
+        url = match.group(0)
+        if is_allowed_domain(url):
+            first_allowed_link = url
+            break
     if not first_allowed_link:
         return  # Ignore messages with no allowed links
-    cleanup_recent_links()
-    now = time.time()
-    # Duplicate detection
-    norm_trans = normalize_link(first_allowed_link.rstrip('/'))
-    is_duplicate = norm_trans in recent_links
-    # Snarky comment if duplicate
-    snarky = random.choice(SNARKY_COMMENTS) if is_duplicate else None
-    # Prepare message
-    mention_str = author_mention
-    text_content = first_allowed_link
-    if snarky:
-        final_message = f"{mention_str} {text_content}\n{snarky}"
+    # Special Reddit handling
+    parsed = urllib.parse.urlparse(first_allowed_link)
+    netloc = parsed.netloc.lower()
+    if netloc.startswith('www.'):
+        netloc = netloc[4:]
+    is_reddit = netloc.endswith('reddit.com') or netloc.endswith('redd.it') or netloc.endswith('vxreddit.com') or netloc.endswith('rxddit.com')
+    embeds = []
+    final_message = None
+    norm_trans = None
+    if is_reddit:
+        # Expand shortlink if needed
+        if 'redd.it' in netloc:
+            first_allowed_link = await expand_reddit_shortlink(first_allowed_link)
+        # Normalize to post URL (strip comment if present)
+        post_url = normalize_reddit_post_url(first_allowed_link)
+        # Fetch metadata
+        meta = await fetch_reddit_post_metadata(post_url)
+        if meta["type"] == "image" and meta.get("images"):
+            for img_url in meta["images"]:
+                if img_url:
+                    embeds.append(hikari.Embed().set_image(img_url))
+            final_message = author_mention
+            norm_trans = normalize_link(post_url.rstrip('/'))
+        elif meta["type"] == "gallery" and meta.get("images"):
+            for img_url in meta["images"]:
+                if img_url:
+                    embeds.append(hikari.Embed().set_image(img_url))
+            final_message = author_mention
+            norm_trans = normalize_link(post_url.rstrip('/'))
+        elif meta["type"] == "video" or meta["type"] == "other" or meta["type"] == "unknown":
+            # Convert to vxreddit.com
+            vx_url = post_url.replace('reddit.com', 'vxreddit.com').replace('www.reddit.com', 'vxreddit.com')
+            norm_trans = normalize_link(vx_url.rstrip('/'))
+            is_duplicate = norm_trans in recent_links
+            snarky = random.choice(SNARKY_COMMENTS) if is_duplicate else None
+            if snarky:
+                final_message = f"{author_mention} {vx_url}\n{snarky}"
+            else:
+                final_message = f"{author_mention} {vx_url}"
+        else:
+            # Fallback: post the link as normal
+            final_message = f"{author_mention} {post_url}"
+            norm_trans = normalize_link(post_url.rstrip('/'))
     else:
-        final_message = f"{mention_str} {text_content}"
+        # Non-Reddit allowed link: use previous logic
+        norm_trans = normalize_link(first_allowed_link.rstrip('/'))
+        is_duplicate = norm_trans in recent_links
+        snarky = random.choice(SNARKY_COMMENTS) if is_duplicate else None
+        if snarky:
+            final_message = f"{author_mention} {first_allowed_link}\n{snarky}"
+        else:
+            final_message = f"{author_mention} {first_allowed_link}"
     # Post the new message to the destination channel (if not already there)
+    now = time.time()
     try:
         if event.channel_id == SOURCE_CHANNEL_ID:
-            created_message = await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message)
+            created_message = await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message, embeds=embeds if embeds else None)
             logger.info(f"[DEBUG] Posted transformed message to destination: {final_message}")
-            recent_links[norm_trans] = [now, event.message_id, author_id]
-            save_recent_links()
+            if norm_trans:
+                recent_links[norm_trans] = [now, event.message_id, author_id]
+                save_recent_links()
             await bot.rest.delete_message(event.channel_id, event.message_id)
             logger.info(f"[DEBUG] Deleted original message after moving links.")
         elif event.channel_id == DESTINATION_CHANNEL_ID:
             await bot.rest.delete_message(event.channel_id, event.message_id)
-            await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message)
+            await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message, embeds=embeds if embeds else None)
             logger.info(f"[DEBUG] Transformed and reposted message in destination channel: {final_message}")
-            recent_links[norm_trans] = [now, event.message_id, author_id]
-            save_recent_links()
+            if norm_trans:
+                recent_links[norm_trans] = [now, event.message_id, author_id]
+                save_recent_links()
     except hikari.ForbiddenError:
         logger.error("Bot doesn't have permission to post or delete in the destination channel")
         print_permissions_guide()
     except Exception as e:
         logger.error(f"Error posting or deleting message: {e}")
+
+# --- REDDIT LINK HELPERS ---
+
+REDDIT_COMMENT_REGEX = re.compile(r"(https?://(?:www\.)?reddit\.com/r/[^/]+/comments/[^/]+)(?:/[^/]+)?(?:/([a-z0-9]+))?(?:/)?(?:\?[^#]*)?(?:#.*)?", re.IGNORECASE)
+REDDIT_SHORTLINK_REGEX = re.compile(r"https?://(www\.)?redd\.it/([a-zA-Z0-9]+)")
+
+async def expand_reddit_shortlink(url: str) -> str:
+    """Expand redd.it shortlinks to full Reddit URLs."""
+    try:
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.head(url, allow_redirects=True) as resp:
+                return str(resp.url)
+    except Exception as e:
+        logger.warning(f"Failed to expand Reddit shortlink {url}: {e}")
+        return url
+
+def normalize_reddit_post_url(url: str) -> str:
+    """If the URL is a Reddit comment link, strip to the post URL."""
+    match = REDDIT_COMMENT_REGEX.match(url)
+    if match:
+        return match.group(1)  # Only the post, no comment or extra path
+    return url
+
+async def fetch_reddit_post_metadata(post_url: str) -> dict:
+    """Fetch Reddit post JSON and return info about type (image, gallery, video, etc)."""
+    # Ensure .json at the end
+    if not post_url.endswith('.json'):
+        if post_url.endswith('/'):
+            json_url = post_url + '.json'
+        else:
+            json_url = post_url + '/.json'
+    else:
+        json_url = post_url
+    try:
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(json_url, headers={"User-Agent": "discord-link-mover-bot/1.0"}) as resp:
+                if resp.status != 200:
+                    logger.warning(f"Reddit metadata fetch failed: {json_url} status {resp.status}")
+                    return {"type": "unknown"}
+                data = await resp.json()
+                post = data[0]["data"]["children"][0]["data"]
+                # Detect type
+                if post.get("is_gallery"):
+                    # Gallery: collect all image URLs
+                    items = post.get("gallery_data", {}).get("items", [])
+                    media_metadata = post.get("media_metadata", {})
+                    images = []
+                    for item in items:
+                        media_id = item["media_id"]
+                        meta = media_metadata.get(media_id, {})
+                        if meta.get("status") == "valid":
+                            # Get best available image
+                            if "s" in meta:
+                                images.append(meta["s"].get("u"))
+                    return {"type": "gallery", "images": images}
+                elif post.get("post_hint") == "image" and post.get("url"):
+                    return {"type": "image", "images": [post["url"]]}
+                elif post.get("is_video") or post.get("post_hint") == "hosted:video":
+                    return {"type": "video", "video_url": post.get("media", {}).get("reddit_video", {}).get("fallback_url")}
+                else:
+                    return {"type": "other"}
+    except Exception as e:
+        logger.warning(f"Error fetching Reddit metadata for {post_url}: {e}")
+        return {"type": "unknown"}
 
 def main():
     logger.info("Starting Discord Link Mover Bot (Direct Channel Version)...")
