@@ -482,6 +482,14 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
                     embeds.append(hikari.Embed().set_image(img_url))
             final_message = f"{author_mention} {post_url}"
             norm_trans = normalize_link(post_url.rstrip('/'))
+        elif meta["type"] == "redgifs" and meta.get("redgifs_url"):
+            # Special case: Redgifs video in Reddit post
+            redgifs_url = meta["redgifs_url"]
+            # Discord does not natively embed Redgifs, but we can try to embed as a video or provide the link
+            embed = hikari.Embed().set_description(f"[View on Redgifs]({redgifs_url})")
+            embeds.append(embed)
+            final_message = f"{author_mention} {post_url} {redgifs_url}"
+            norm_trans = normalize_link(post_url.rstrip('/'))
         elif meta["type"] == "video" or meta["type"] == "other" or meta["type"] == "unknown":
             # Convert to vxreddit.com
             vx_url = post_url.replace('reddit.com', 'vxreddit.com').replace('www.reddit.com', 'vxreddit.com')
@@ -588,8 +596,17 @@ async def fetch_reddit_post_metadata(post_url: str) -> dict:
                 elif post.get("post_hint") == "image" and post.get("url"):
                     return {"type": "image", "images": [post["url"]]}
                 elif post.get("is_video") or post.get("post_hint") == "hosted:video":
-                    return {"type": "video", "video_url": post.get("media", {}).get("reddit_video", {}).get("fallback_url")}
+                    video_url = post.get("media", {}).get("reddit_video", {}).get("fallback_url")
+                    # Special: check for redgifs.com in media/fallback URL
+                    if not video_url and post.get("url") and "redgifs.com" in post.get("url"):
+                        video_url = post.get("url")
+                    if video_url and "redgifs.com" in video_url:
+                        return {"type": "redgifs", "redgifs_url": video_url}
+                    return {"type": "video", "video_url": video_url}
                 else:
+                    # Check for redgifs in url for other types
+                    if post.get("url") and "redgifs.com" in post.get("url"):
+                        return {"type": "redgifs", "redgifs_url": post.get("url")}
                     return {"type": "other"}
     except Exception as e:
         logger.warning(f"Error fetching Reddit metadata for {post_url}: {e}")
