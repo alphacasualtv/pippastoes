@@ -8,6 +8,7 @@ import logging
 import random
 from dotenv import load_dotenv
 import aiohttp
+import urllib.parse
 
 # Load environment variables from .env file
 load_dotenv()
@@ -280,33 +281,33 @@ def transform_url(url: str) -> str:
     path = match.group(2)
     logger.info(f"[DEBUG] transform_url: url={url}, domain={domain}, path={path}")
 
+    # Use urllib.parse for domain extraction
+    parsed = urllib.parse.urlparse(url)
+    netloc = parsed.netloc.lower()
+    if netloc.startswith('www.'):
+        netloc = netloc[4:]
+
     # New: Transform all Reddit links to vxreddit.com for embedding
-    if 'reddit.com' in domain.lower() or 'vxreddit.com' in domain.lower():
-        # Always strip query string from the full URL for post links
+    if netloc.endswith("reddit.com") or netloc.endswith("vxreddit.com"):
         base_url = url.split('?')[0]
-        # Re-parse to get the path after stripping query
         match_base = re.match(URL_PATTERN, base_url)
         if match_base:
-            base_domain = match_base.group(1)
             base_path = match_base.group(2)
-            logger.info(f"[DEBUG] transform_url (base): base_url={base_url}, base_domain={base_domain}, base_path={base_path}")
+            logger.info(f"[DEBUG] transform_url (base): base_url={base_url}, base_path={base_path}")
             if '/comments/' in base_path:
                 logger.info(f"[DEBUG] Cleaned Reddit/vxreddit link: https://vxreddit.com{base_path}")
                 return f'https://vxreddit.com{base_path}'
             return f'https://reddit.com{base_path}'
-        # Fallback if re-parse fails
         return base_url
 
     # Special handling for Twitter/X domains
-    if any(twitter_domain in domain for twitter_domain in ['twitter.com', 'x.com']):
-        # Remove any www. prefix if present
-        clean_domain = domain.replace('www.', '')
-        # Replace either twitter.com or x.com with fxtwitter.com
+    if netloc.endswith('twitter.com') or netloc.endswith('x.com'):
         return f'https://fxtwitter.com{path}'
 
     # Check if this domain needs transformation
     for original, replacement in URL_TRANSFORMATIONS.items():
-        if original in domain:
+        # Allow subdomains, but only match at the end
+        if netloc.endswith(original):
             # Special handling for YouTube
             if original == 'youtube.com':
                 if 'watch?v=' in path:
@@ -320,7 +321,7 @@ def transform_url(url: str) -> str:
                     live_id = path.split('/live/')[1].split('?')[0]
                     return f'https://youtu.be/{live_id}'
             # For all other transformations
-            new_domain = domain.replace(original, replacement)
+            new_domain = netloc.replace(original, replacement) if original in netloc else replacement
             return f'https://{new_domain}{path}'
 
     return url
@@ -449,8 +450,9 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
                 reddit_gifs.append(url)
             else:
                 reddit_images.append(url)
-        # Reddit video
-        elif any(d in domain for d in reddit_video_domains):
+        # Reddit video (v.redd.it or reddit.com post with /comments/)
+        elif any(d in domain for d in reddit_video_domains) or ("reddit.com" in domain and "/comments/" in url):
+            # Always transform to vxreddit.com for embedding
             transformed = await transform_and_expand_url(url)
             if transformed and transformed != url:
                 reddit_videos.append(transformed)
