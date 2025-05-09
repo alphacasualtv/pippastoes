@@ -267,6 +267,11 @@ def is_media_url(url: str) -> bool:
     
     return any(re.search(pattern, url_lower) for pattern in video_patterns)
 
+def is_subdomain_or_exact(netloc, domain):
+    netloc_parts = netloc.split('.')
+    domain_parts = domain.split('.')
+    return netloc_parts[-len(domain_parts):] == domain_parts
+
 def transform_url(url: str) -> str:
     """Transform URLs to their embedding-friendly versions."""
     # Don't transform media URLs
@@ -306,8 +311,7 @@ def transform_url(url: str) -> str:
 
     # Check if this domain needs transformation
     for original, replacement in URL_TRANSFORMATIONS.items():
-        # Allow subdomains, but only match at the end
-        if netloc.endswith(original):
+        if is_subdomain_or_exact(netloc, original):
             # Special handling for YouTube
             if original == 'youtube.com':
                 if 'watch?v=' in path:
