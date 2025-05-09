@@ -510,14 +510,18 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
             final_message = f"{author_mention} {post_url}"
             norm_trans = normalize_link(post_url.rstrip('/'))
     else:
-        # Non-Reddit allowed link: use previous logic
-        norm_trans = normalize_link(first_allowed_link.rstrip('/'))
+        # Non-Reddit allowed link: transform before posting
+        transformed_link = transform_url(first_allowed_link)
+        if not transformed_link:
+            transformed_link = first_allowed_link  # fallback if transform_url returns None
+        logger.info(f"[DEBUG] Non-Reddit link: original={first_allowed_link} transformed={transformed_link}")
+        norm_trans = normalize_link(transformed_link.rstrip('/'))
         is_duplicate = norm_trans in recent_links
         snarky = random.choice(SNARKY_COMMENTS) if is_duplicate else None
         if snarky:
-            final_message = f"{author_mention} {first_allowed_link}\n{snarky}"
+            final_message = f"{author_mention} {transformed_link}\n{snarky}"
         else:
-            final_message = f"{author_mention} {first_allowed_link}"
+            final_message = f"{author_mention} {transformed_link}"
     # Post the new message to the destination channel (if not already there)
     now = time.time()
     try:
