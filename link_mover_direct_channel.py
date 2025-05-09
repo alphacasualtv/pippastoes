@@ -473,22 +473,25 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
         if meta["type"] == "image" and meta.get("images"):
             for img_url in meta["images"]:
                 if img_url:
-                    embeds.append(hikari.Embed().set_image(img_url))
+                    embeds.append(hikari.Embed(image=img_url))
             final_message = f"{author_mention} {post_url}"
             norm_trans = normalize_link(post_url.rstrip('/'))
         elif meta["type"] == "gallery" and meta.get("images"):
             for img_url in meta["images"]:
                 if img_url:
-                    embeds.append(hikari.Embed().set_image(img_url))
+                    embeds.append(hikari.Embed(image=img_url))
             final_message = f"{author_mention} {post_url}"
             norm_trans = normalize_link(post_url.rstrip('/'))
         elif meta["type"] == "redgifs" and meta.get("redgifs_url"):
-            # Special case: Redgifs video in Reddit post
             redgifs_url = meta["redgifs_url"]
-            # Discord does not natively embed Redgifs, but we can try to embed as a video or provide the link
-            embed = hikari.Embed().set_description(f"[View on Redgifs]({redgifs_url})")
-            embeds.append(embed)
-            final_message = f"{author_mention} {post_url} {redgifs_url}"
+            # Try to extract direct mp4 from Redgifs API
+            direct_mp4 = await get_redgifs_mp4(redgifs_url)
+            if direct_mp4:
+                final_message = f"{author_mention} {direct_mp4}"
+                logger.info(f"[DEBUG] Posted direct Redgifs mp4: {direct_mp4}")
+            else:
+                final_message = f"{author_mention} {redgifs_url}"
+                logger.info(f"[DEBUG] Posted Redgifs page URL: {redgifs_url}")
             norm_trans = normalize_link(post_url.rstrip('/'))
         elif meta["type"] == "video" or meta["type"] == "other" or meta["type"] == "unknown":
             # Convert to vxreddit.com
@@ -611,6 +614,34 @@ async def fetch_reddit_post_metadata(post_url: str) -> dict:
     except Exception as e:
         logger.warning(f"Error fetching Reddit metadata for {post_url}: {e}")
         return {"type": "unknown"}
+
+# --- REDGIFS DIRECT MP4 HELPER ---
+
+async def get_redgifs_mp4(redgifs_url: str) -> str:
+    """Try to extract the direct mp4 URL from a Redgifs page URL using the Redgifs API."""
+    # Redgifs URLs are like https://redgifs.com/watch/<id>
+    match = re.search(r"redgifs.com/(?:watch|ifr|embed)/([a-zA-Z0-9]+)", redgifs_url)
+    if not match:
+        return None
+    gif_id = match.group(1)
+    api_url = f"https://api.redgifs.com/v2/gifs/{gif_id}"
+    try:
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(api_url, headers={"User-Agent": "discord-link-mover-bot/1.0"}) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                # Try to get the best quality mp4
+                mp4_url = (
+                    data.get("gif", {}).get("urls", {}).get("hd") or
+                    data.get("gif", {}).get("urls", {}).get("sd") or
+                    data.get("gif", {}).get("urls", {}).get("mobile")
+                )
+                return mp4_url
+    except Exception as e:
+        logger.warning(f"Failed to fetch Redgifs mp4 for {redgifs_url}: {e}")
+        return None
 
 def main():
     logger.info("Starting Discord Link Mover Bot (Direct Channel Version)...")
