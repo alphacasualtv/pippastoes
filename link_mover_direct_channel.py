@@ -473,15 +473,13 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
         # Fetch metadata
         meta = await fetch_reddit_post_metadata(post_url)
         if meta["type"] == "image" and meta.get("images"):
-            for img_url in meta["images"]:
-                if img_url:
-                    embeds.append(hikari.Embed(image=img_url))
+            images = meta["images"]
+            embeds = [hikari.Embed().set_image(img_url) for img_url in images if img_url]
             final_message = f"{author_mention} {post_url}"
             norm_trans = normalize_link(post_url.rstrip('/'))
         elif meta["type"] == "gallery" and meta.get("images"):
-            for img_url in meta["images"]:
-                if img_url:
-                    embeds.append(hikari.Embed(image=img_url))
+            images = meta["images"]
+            embeds = [hikari.Embed().set_image(img_url) for img_url in images if img_url]
             final_message = f"{author_mention} {post_url}"
             norm_trans = normalize_link(post_url.rstrip('/'))
         elif meta["type"] == "redgifs" and meta.get("redgifs_url"):
@@ -526,8 +524,17 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     now = time.time()
     try:
         if event.channel_id == SOURCE_CHANNEL_ID:
-            created_message = await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message, embeds=embeds if embeds else None)
-            logger.info(f"[DEBUG] Posted transformed message to destination: {final_message}")
+            # If there are embeds and more than 10, batch them
+            if embeds and len(embeds) > 0:
+                for i in range(0, len(embeds), 10):
+                    batch = embeds[i:i+10]
+                    # Only include the post link in the first message
+                    content = final_message if i == 0 else None
+                    created_message = await bot.rest.create_message(DESTINATION_CHANNEL_ID, content, embeds=batch)
+                    logger.info(f"[DEBUG] Posted embed batch {i//10+1}: {len(batch)} embeds to destination.")
+            else:
+                created_message = await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message, embeds=embeds if embeds else None)
+                logger.info(f"[DEBUG] Posted transformed message to destination: {final_message}")
             if norm_trans:
                 recent_links[norm_trans] = [now, event.message_id, author_id]
                 save_recent_links()
@@ -535,8 +542,16 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
             logger.info(f"[DEBUG] Deleted original message after moving links.")
         elif event.channel_id == DESTINATION_CHANNEL_ID:
             await bot.rest.delete_message(event.channel_id, event.message_id)
-            await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message, embeds=embeds if embeds else None)
-            logger.info(f"[DEBUG] Transformed and reposted message in destination channel: {final_message}")
+            # If there are embeds and more than 10, batch them
+            if embeds and len(embeds) > 0:
+                for i in range(0, len(embeds), 10):
+                    batch = embeds[i:i+10]
+                    content = final_message if i == 0 else None
+                    await bot.rest.create_message(DESTINATION_CHANNEL_ID, content, embeds=batch)
+                    logger.info(f"[DEBUG] Reposted embed batch {i//10+1}: {len(batch)} embeds in destination.")
+            else:
+                await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message, embeds=embeds if embeds else None)
+                logger.info(f"[DEBUG] Transformed and reposted message in destination channel: {final_message}")
             if norm_trans:
                 recent_links[norm_trans] = [now, event.message_id, author_id]
                 save_recent_links()
