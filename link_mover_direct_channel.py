@@ -291,7 +291,9 @@ def is_allowed_domain(url: str) -> bool:
         netloc_parts = netloc.split('.')
         allowed_parts = allowed.split('.')
         if len(netloc_parts) >= len(allowed_parts) and netloc_parts[-len(allowed_parts):] == allowed_parts:
+            logger.debug(f"[is_allowed_domain] ALLOWED: {netloc} matches {allowed}")
             return True
+    logger.debug(f"[is_allowed_domain] NOT ALLOWED: {netloc}")
     return False
 
 # Only transform URLs for allowed domains
@@ -654,6 +656,24 @@ def main():
         logger.error(f"Error running bot: {e}")
         print("\nPress Enter to exit...")
         input()
+
+# --- TESTS FOR TRANSFORM_URL ---
+if __name__ == "__main__":
+    # ... existing code ...
+    def _test_transform_url():
+        test_cases = [
+            ("https://x.com/username/status/123", "https://fxtwitter.com/username/status/123"),
+            ("https://twitter.com/username/status/456", "https://fxtwitter.com/username/status/456"),
+            ("https://www.x.com/username/status/789", "https://fxtwitter.com/username/status/789"),
+            ("https://fxtwitter.com/username/status/1011", "https://fxtwitter.com/username/status/1011"),
+        ]
+        for input_url, expected in test_cases:
+            result = transform_url(input_url)
+            print(f"transform_url({input_url}) = {result}")
+            assert result == expected, f"Expected {expected}, got {result}"
+        print("All transform_url tests passed.")
+    _test_transform_url()
+    # ... existing code ...
 
 if __name__ == "__main__":
     main() 
