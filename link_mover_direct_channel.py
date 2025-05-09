@@ -287,7 +287,10 @@ def is_allowed_domain(url: str) -> bool:
     if netloc.startswith('www.'):
         netloc = netloc[4:]
     for allowed in ALLOWED_DOMAINS:
-        if allowed in netloc:
+        allowed = allowed.lower()
+        netloc_parts = netloc.split('.')
+        allowed_parts = allowed.split('.')
+        if len(netloc_parts) >= len(allowed_parts) and netloc_parts[-len(allowed_parts):] == allowed_parts:
             return True
     return False
 
