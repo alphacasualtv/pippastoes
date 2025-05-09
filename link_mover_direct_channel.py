@@ -60,6 +60,15 @@ logging.basicConfig(
 logger = logging.getLogger("LinkMover")
 
 # ==== CONFIGURATION ====
+# Allowed platforms for transformation and posting
+ALLOWED_DOMAINS = [
+    'youtube.com', 'youtu.be',
+    'twitter.com', 'x.com', 'fxtwitter.com',
+    'reddit.com', 'redd.it', 'vxreddit.com',
+    'instagram.com', 'ddinstagram.com',
+    'tiktok.com', 'vxtiktok.com',
+]
+
 # These values are now loaded from environment variables for security and flexibility
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 try:
@@ -272,28 +281,35 @@ def is_subdomain_or_exact(netloc, domain):
     domain_parts = domain.split('.')
     return netloc_parts[-len(domain_parts):] == domain_parts
 
-def transform_url(url: str) -> str:
-    """Transform URLs to their embedding-friendly versions."""
-    # Don't transform media URLs
-    if is_media_url(url):
-        return None  # Return None to indicate this URL should be skipped
-
-    match = re.match(URL_PATTERN, url)
-    if not match:
-        return url
-
-    domain = match.group(1)
-    path = match.group(2)
-    logger.info(f"[DEBUG] transform_url: url={url}, domain={domain}, path={path}")
-
-    # Use urllib.parse for domain extraction
+def is_allowed_domain(url: str) -> bool:
     parsed = urllib.parse.urlparse(url)
     netloc = parsed.netloc.lower()
     if netloc.startswith('www.'):
         netloc = netloc[4:]
+    for allowed in ALLOWED_DOMAINS:
+        if allowed in netloc:
+            return True
+    return False
 
-    # New: Transform all Reddit links to vxreddit.com for embedding
-    if netloc.endswith("reddit.com") or netloc.endswith("vxreddit.com"):
+# Only transform URLs for allowed domains
+def transform_url(url: str) -> str:
+    if not is_allowed_domain(url):
+        return None  # Not allowed, skip
+    # Don't transform media URLs
+    if is_media_url(url):
+        return None
+    match = re.match(URL_PATTERN, url)
+    if not match:
+        return url
+    domain = match.group(1)
+    path = match.group(2)
+    logger.info(f"[DEBUG] transform_url: url={url}, domain={domain}, path={path}")
+    parsed = urllib.parse.urlparse(url)
+    netloc = parsed.netloc.lower()
+    if netloc.startswith('www.'):
+        netloc = netloc[4:]
+    # Reddit
+    if netloc.endswith("reddit.com") or netloc.endswith("vxreddit.com") or netloc.endswith("redd.it"):
         base_url = url.split('?')[0]
         match_base = re.match(URL_PATTERN, base_url)
         if match_base:
@@ -304,31 +320,39 @@ def transform_url(url: str) -> str:
                 return f'https://vxreddit.com{base_path}'
             return f'https://reddit.com{base_path}'
         return base_url
-
-    # Special handling for Twitter/X domains
-    if netloc.endswith('twitter.com') or netloc.endswith('x.com'):
+    # Twitter/X
+    if netloc.endswith('twitter.com') or netloc.endswith('x.com') or netloc.endswith('fxtwitter.com'):
         return f'https://fxtwitter.com{path}'
-
-    # Check if this domain needs transformation
-    for original, replacement in URL_TRANSFORMATIONS.items():
-        if is_subdomain_or_exact(netloc, original):
-            # Special handling for YouTube
-            if original == 'youtube.com':
-                if 'watch?v=' in path:
-                    video_id = re.search(r'watch\?v=([^&\s]+)', path)
-                    if video_id:
-                        return f'https://youtu.be/{video_id.group(1)}'
-                elif '/shorts/' in path:
-                    shorts_id = path.split('/shorts/')[1].split('?')[0]
-                    return f'https://youtu.be/{shorts_id}'
-                elif '/live/' in path:
-                    live_id = path.split('/live/')[1].split('?')[0]
-                    return f'https://youtu.be/{live_id}'
-            # For all other transformations
-            new_domain = netloc.replace(original, replacement) if original in netloc else replacement
-            return f'https://{new_domain}{path}'
-
+    # YouTube
+    if netloc.endswith('youtube.com') or netloc.endswith('youtu.be'):
+        if 'watch?v=' in path:
+            video_id = re.search(r'watch\?v=([^&\s]+)', path)
+            if video_id:
+                return f'https://youtu.be/{video_id.group(1)}'
+        elif '/shorts/' in path:
+            shorts_id = path.split('/shorts/')[1].split('?')[0]
+            return f'https://youtu.be/{shorts_id}'
+        elif '/live/' in path:
+            live_id = path.split('/live/')[1].split('?')[0]
+            return f'https://youtu.be/{live_id}'
+    # Instagram
+    if netloc.endswith('instagram.com') or netloc.endswith('ddinstagram.com'):
+        return url.replace('instagram.com', 'ddinstagram.com')
+    # TikTok
+    if netloc.endswith('tiktok.com') or netloc.endswith('vxtiktok.com'):
+        return url.replace('tiktok.com', 'vxtiktok.com')
     return url
+
+# Patch process_nested_links_async to only process the first allowed link
+async def process_first_allowed_link(content: str) -> str:
+    matches = list(re.finditer(URL_PATTERN, content))
+    for match in matches:
+        full_url = match.group(0)
+        if is_allowed_domain(full_url):
+            transformed = await transform_and_expand_url(full_url)
+            if transformed:
+                return transformed
+    return None
 
 logger.info("==== Configuration ====")
 logger.info("Configuration loaded from environment variables.")
@@ -413,132 +437,42 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     # Only process messages from source or destination channel
     if event.is_bot or not event.content or event.channel_id not in {SOURCE_CHANNEL_ID, DESTINATION_CHANNEL_ID}:
         return
-
     author = event.author
     author_mention = f"<@{author.id}>" if author else "Unknown User"
     author_id = str(author.id) if author else None
     channel_mention = f"<#{event.channel_id}>"
-
-    # Extract mentions and preserve formatting
-    cleaned_content, mentions = extract_mentions(event.content)
-    mention_str = " ".join([author_mention] + mentions) if mentions else author_mention
-
-    # Find all URLs in the message
-    matches = list(re.finditer(URL_PATTERN, event.content))
-    full_urls = [match.group(0) for match in matches]
-    if not full_urls:
-        return
-
+    # Only process the first allowed link
+    first_allowed_link = await process_first_allowed_link(event.content)
+    if not first_allowed_link:
+        return  # Ignore messages with no allowed links
     cleanup_recent_links()
     now = time.time()
-
-    # Classify links: reddit images/gifs, reddit videos, other links
-    reddit_image_domains = ["i.redd.it", "preview.redd.it"]
-    reddit_image_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp"]
-    reddit_gif_exts = [".gif", ".gifv"]
-    reddit_video_domains = ["v.redd.it"]
-    allowed_transform_domains = list(URL_TRANSFORMATIONS.keys())
-    reddit_images = []
-    reddit_gifs = []
-    reddit_videos = []
-    other_links = []
-    # Build a mapping of original URL -> transformed URL for allowed links
-    url_replacements = {}
-    for url in full_urls:
-        url_lower = url.lower()
-        domain_match = re.match(URL_PATTERN, url)
-        domain = domain_match.group(1) if domain_match else ""
-        # Reddit image/gif
-        if any(domain.endswith(d) for d in reddit_image_domains) and any(url_lower.endswith(ext) for ext in reddit_image_exts + reddit_gif_exts):
-            if any(url_lower.endswith(ext) for ext in reddit_gif_exts):
-                reddit_gifs.append(url)
-            else:
-                reddit_images.append(url)
-        # Reddit video (v.redd.it or reddit.com post with /comments/)
-        elif any(d in domain for d in reddit_video_domains) or ("reddit.com" in domain and "/comments/" in url):
-            # Always transform to vxreddit.com for embedding
-            transformed = await transform_and_expand_url(url)
-            if transformed and transformed != url:
-                reddit_videos.append(transformed)
-                url_replacements[url] = transformed
-        # Allowed transformation domains
-        elif any(allowed_domain in domain for allowed_domain in allowed_transform_domains):
-            transformed = await transform_and_expand_url(url)
-            if transformed and transformed != url:
-                other_links.append(transformed)
-                url_replacements[url] = transformed
-        # Otherwise, skip (not allowed)
-        else:
-            continue
-    # If no allowed links, ignore the message
-    if not (reddit_images or reddit_gifs or reddit_videos or other_links):
-        return
-
-    # Replace allowed links in the original message with their transformed versions
-    new_content = event.content
-    for orig_url, transformed_url in url_replacements.items():
-        new_content = new_content.replace(orig_url, transformed_url)
-
-    # Extract mentions and preserve formatting
-    cleaned_content, mentions = extract_mentions(new_content)
-    mention_str = " ".join([author_mention] + mentions) if mentions else author_mention
-    text_content = cleaned_content.strip()
-    if text_content:
-        final_message = f"{mention_str} {text_content}".strip()
+    # Duplicate detection
+    norm_trans = normalize_link(first_allowed_link.rstrip('/'))
+    is_duplicate = norm_trans in recent_links
+    # Snarky comment if duplicate
+    snarky = random.choice(SNARKY_COMMENTS) if is_duplicate else None
+    # Prepare message
+    mention_str = author_mention
+    text_content = first_allowed_link
+    if snarky:
+        final_message = f"{mention_str} {text_content}\n{snarky}"
     else:
-        final_message = mention_str
-
-    # Prepare embeds for images/gifs
-    embeds = []
-    for img_url in reddit_images:
-        embeds.append(hikari.Embed().set_image(img_url))
-    for gif_url in reddit_gifs:
-        embeds.append(hikari.Embed().set_image(gif_url))
-    # Discord allows up to 10 embeds per message
-    embeds = embeds[:10]
-
+        final_message = f"{mention_str} {text_content}"
     # Post the new message to the destination channel (if not already there)
     try:
         if event.channel_id == SOURCE_CHANNEL_ID:
-            # Post the message and get the created message object
-            created_message = await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message, embeds=embeds if embeds else None)
+            created_message = await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message)
             logger.info(f"[DEBUG] Posted transformed message to destination: {final_message}")
-            # Save recent links
-            for check_url in url_replacements.values():
-                norm_trans = normalize_link(check_url.rstrip('/'))
-                recent_links[norm_trans] = [now, event.message_id, author_id]
+            recent_links[norm_trans] = [now, event.message_id, author_id]
             save_recent_links()
-            # Delete the original message
             await bot.rest.delete_message(event.channel_id, event.message_id)
             logger.info(f"[DEBUG] Deleted original message after moving links.")
-
-            # === VXREDDIT EMBED CHECK AND CORRECTION ===
-            vxreddit_links = [url for url in reddit_videos if url.startswith('https://vxreddit.com')]
-            if vxreddit_links:
-                await asyncio.sleep(3)  # Wait for embed to load
-                try:
-                    msg = await bot.rest.fetch_message(DESTINATION_CHANNEL_ID, created_message.id)
-                    failed = False
-                    if msg.embeds:
-                        for embed in msg.embeds:
-                            if (embed.title and 'failed to get data from reddit' in embed.title.lower()) or \
-                               (embed.description and 'failed to get data from reddit' in embed.description.lower()) or \
-                               any('failed to get data from reddit' in (f.value or '').lower() for f in getattr(embed, 'fields', [])):
-                                failed = True
-                                break
-                    if failed:
-                        corrected_message = final_message.replace('vxreddit.com', 'rxddit.com')
-                        await bot.rest.edit_message(DESTINATION_CHANNEL_ID, created_message.id, corrected_message)
-                        logger.info(f"[DEBUG] Edited message to use rxddit.com due to vxreddit embed failure: {corrected_message}")
-                except Exception as e:
-                    logger.error(f"[VXREDDIT CHECK] Error during vxreddit embed check or correction: {e}")
         elif event.channel_id == DESTINATION_CHANNEL_ID:
             await bot.rest.delete_message(event.channel_id, event.message_id)
-            await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message, embeds=embeds if embeds else None)
+            await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message)
             logger.info(f"[DEBUG] Transformed and reposted message in destination channel: {final_message}")
-            for check_url in url_replacements.values():
-                norm_trans = normalize_link(check_url.rstrip('/'))
-                recent_links[norm_trans] = [now, event.message_id, author_id]
+            recent_links[norm_trans] = [now, event.message_id, author_id]
             save_recent_links()
     except hikari.ForbiddenError:
         logger.error("Bot doesn't have permission to post or delete in the destination channel")
