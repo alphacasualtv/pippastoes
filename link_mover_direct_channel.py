@@ -474,13 +474,13 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
             for img_url in meta["images"]:
                 if img_url:
                     embeds.append(hikari.Embed().set_image(img_url))
-            final_message = author_mention
+            final_message = f"{author_mention} {post_url}"
             norm_trans = normalize_link(post_url.rstrip('/'))
         elif meta["type"] == "gallery" and meta.get("images"):
             for img_url in meta["images"]:
                 if img_url:
                     embeds.append(hikari.Embed().set_image(img_url))
-            final_message = author_mention
+            final_message = f"{author_mention} {post_url}"
             norm_trans = normalize_link(post_url.rstrip('/'))
         elif meta["type"] == "video" or meta["type"] == "other" or meta["type"] == "unknown":
             # Convert to vxreddit.com
