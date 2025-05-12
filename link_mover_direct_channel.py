@@ -445,116 +445,101 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     author = event.author
     author_mention = f"<@{author.id}>" if author else "Unknown User"
     author_id = str(author.id) if author else None
-    # Only process the first allowed link
+    # Only process the first allowed link, unless a second is Redgifs
     matches = list(re.finditer(URL_PATTERN, event.content))
-    first_allowed_link = None
+    allowed_links = []
+    redgifs_link = None
     for match in matches:
         url = match.group(0)
         if is_allowed_domain(url):
-            first_allowed_link = url
-            break
-    if not first_allowed_link:
+            if not allowed_links:
+                allowed_links.append(url)
+            elif not redgifs_link and "redgifs.com" in url:
+                redgifs_link = url
+                break  # Only process one Redgifs as second link
+    if not allowed_links:
         return  # Ignore messages with no allowed links
-    # Special Reddit handling
+    # Extract user text (excluding the reposted link(s)) and preserve mentions
+    content_wo_links = event.content
+    for link in allowed_links:
+        content_wo_links = content_wo_links.replace(link, "")
+    if redgifs_link:
+        content_wo_links = content_wo_links.replace(redgifs_link, "")
+    cleaned_content, mentions = extract_mentions(content_wo_links)
+    user_text = cleaned_content.strip()
+    if mentions:
+        user_text = (user_text + " " + " ".join(mentions)).strip()
+    # Compose repost message base
+    repost_prefix = f"{author_mention} "
+    if user_text:
+        repost_prefix += user_text + "\n"
+    # Helper to post embeds with fallback
+    async def post_embeds_with_fallback(post_url, images, channel_id, message_prefix):
+        embeds = [hikari.Embed().set_image(img_url) for img_url in images if img_url]
+        if embeds:
+            try:
+                for i in range(0, len(embeds), 10):
+                    batch = embeds[i:i+10]
+                    content = f"{message_prefix}{post_url}" if i == 0 else None
+                    await bot.rest.create_message(channel_id, content, embeds=batch)
+                return True
+            except Exception as e:
+                logger.warning(f"Failed to post gallery embeds, falling back to vxreddit: {e}")
+        # Fallback: post vxreddit/rxreddit link
+        vx_url = post_url.replace('reddit.com', 'vxreddit.com').replace('www.reddit.com', 'vxreddit.com')
+        await bot.rest.create_message(channel_id, f"{message_prefix}{vx_url}")
+        return False
+    # Process the first allowed link
+    first_allowed_link = allowed_links[0]
     parsed = urllib.parse.urlparse(first_allowed_link)
     netloc = parsed.netloc.lower()
     if netloc.startswith('www.'):
         netloc = netloc[4:]
     is_reddit = netloc.endswith('reddit.com') or netloc.endswith('redd.it') or netloc.endswith('vxreddit.com') or netloc.endswith('rxddit.com')
-    embeds = []
-    final_message = None
     norm_trans = None
-    if is_reddit:
-        # Expand shortlink if needed
-        if 'redd.it' in netloc:
-            first_allowed_link = await expand_reddit_shortlink(first_allowed_link)
-        # Normalize to post URL (strip comment if present)
-        post_url = normalize_reddit_post_url(first_allowed_link)
-        # Fetch metadata
-        meta = await fetch_reddit_post_metadata(post_url)
-        if meta["type"] == "image" and meta.get("images"):
-            images = meta["images"]
-            embeds = [hikari.Embed().set_image(img_url) for img_url in images if img_url]
-            final_message = f"{author_mention} {post_url}"
-            norm_trans = normalize_link(post_url.rstrip('/'))
-        elif meta["type"] == "gallery" and meta.get("images"):
-            images = meta["images"]
-            embeds = [hikari.Embed().set_image(img_url) for img_url in images if img_url]
-            final_message = f"{author_mention} {post_url}"
-            norm_trans = normalize_link(post_url.rstrip('/'))
-        elif meta["type"] == "redgifs" and meta.get("redgifs_url"):
-            redgifs_url = meta["redgifs_url"]
-            # Try to extract direct mp4 from Redgifs API
-            direct_mp4 = await get_redgifs_mp4(redgifs_url)
-            if direct_mp4:
-                final_message = f"{author_mention} {direct_mp4}"
-                logger.info(f"[DEBUG] Posted direct Redgifs mp4: {direct_mp4}")
-            else:
-                final_message = f"{author_mention} {redgifs_url}"
-                logger.info(f"[DEBUG] Posted Redgifs page URL: {redgifs_url}")
-            norm_trans = normalize_link(post_url.rstrip('/'))
-        elif meta["type"] == "video" or meta["type"] == "other" or meta["type"] == "unknown":
-            # Convert to vxreddit.com
-            vx_url = post_url.replace('reddit.com', 'vxreddit.com').replace('www.reddit.com', 'vxreddit.com')
-            norm_trans = normalize_link(vx_url.rstrip('/'))
-            is_duplicate = norm_trans in recent_links
-            snarky = random.choice(SNARKY_COMMENTS) if is_duplicate else None
-            if snarky:
-                final_message = f"{author_mention} {vx_url}\n{snarky}"
-            else:
-                final_message = f"{author_mention} {vx_url}"
-        else:
-            # Fallback: post the link as normal
-            final_message = f"{author_mention} {post_url}"
-            norm_trans = normalize_link(post_url.rstrip('/'))
-    else:
-        # Non-Reddit allowed link: transform before posting
-        transformed_link = transform_url(first_allowed_link)
-        if not transformed_link:
-            transformed_link = first_allowed_link  # fallback if transform_url returns None
-        logger.info(f"[DEBUG] Non-Reddit link: original={first_allowed_link} transformed={transformed_link}")
-        norm_trans = normalize_link(transformed_link.rstrip('/'))
-        is_duplicate = norm_trans in recent_links
-        snarky = random.choice(SNARKY_COMMENTS) if is_duplicate else None
-        if snarky:
-            final_message = f"{author_mention} {transformed_link}\n{snarky}"
-        else:
-            final_message = f"{author_mention} {transformed_link}"
-    # Post the new message to the destination channel (if not already there)
     now = time.time()
     try:
-        if event.channel_id == SOURCE_CHANNEL_ID:
-            # If there are embeds and more than 10, batch them
-            if embeds and len(embeds) > 0:
-                for i in range(0, len(embeds), 10):
-                    batch = embeds[i:i+10]
-                    # Only include the post link in the first message
-                    content = final_message if i == 0 else None
-                    created_message = await bot.rest.create_message(DESTINATION_CHANNEL_ID, content, embeds=batch)
-                    logger.info(f"[DEBUG] Posted embed batch {i//10+1}: {len(batch)} embeds to destination.")
+        if is_reddit:
+            # Expand shortlink if needed
+            if 'redd.it' in netloc:
+                first_allowed_link = await expand_reddit_shortlink(first_allowed_link)
+            post_url = normalize_reddit_post_url(first_allowed_link)
+            meta = await fetch_reddit_post_metadata(post_url)
+            if meta["type"] == "image" and meta.get("images"):
+                await post_embeds_with_fallback(post_url, meta["images"], DESTINATION_CHANNEL_ID, repost_prefix)
+                norm_trans = normalize_link(post_url.rstrip('/'))
+            elif meta["type"] == "gallery" and meta.get("images"):
+                await post_embeds_with_fallback(post_url, meta["images"], DESTINATION_CHANNEL_ID, repost_prefix)
+                norm_trans = normalize_link(post_url.rstrip('/'))
+            elif meta["type"] == "redgifs" and meta.get("redgifs_url"):
+                redgifs_url = meta["redgifs_url"]
+                direct_mp4 = await get_redgifs_mp4(redgifs_url)
+                msg = f"{repost_prefix}{direct_mp4 if direct_mp4 else redgifs_url}"
+                await bot.rest.create_message(DESTINATION_CHANNEL_ID, msg)
+                norm_trans = normalize_link(post_url.rstrip('/'))
+            elif meta["type"] in ("video", "other", "unknown"):
+                vx_url = post_url.replace('reddit.com', 'vxreddit.com').replace('www.reddit.com', 'vxreddit.com')
+                await bot.rest.create_message(DESTINATION_CHANNEL_ID, f"{repost_prefix}{vx_url}")
+                norm_trans = normalize_link(vx_url.rstrip('/'))
             else:
-                created_message = await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message, embeds=embeds if embeds else None)
-                logger.info(f"[DEBUG] Posted transformed message to destination: {final_message}")
-            if norm_trans:
-                recent_links[norm_trans] = [now, event.message_id, author_id]
-                save_recent_links()
-            await bot.rest.delete_message(event.channel_id, event.message_id)
-            logger.info(f"[DEBUG] Deleted original message after moving links.")
-        elif event.channel_id == DESTINATION_CHANNEL_ID:
-            await bot.rest.delete_message(event.channel_id, event.message_id)
-            # If there are embeds and more than 10, batch them
-            if embeds and len(embeds) > 0:
-                for i in range(0, len(embeds), 10):
-                    batch = embeds[i:i+10]
-                    content = final_message if i == 0 else None
-                    await bot.rest.create_message(DESTINATION_CHANNEL_ID, content, embeds=batch)
-                    logger.info(f"[DEBUG] Reposted embed batch {i//10+1}: {len(batch)} embeds in destination.")
-            else:
-                await bot.rest.create_message(DESTINATION_CHANNEL_ID, final_message, embeds=embeds if embeds else None)
-                logger.info(f"[DEBUG] Transformed and reposted message in destination channel: {final_message}")
-            if norm_trans:
-                recent_links[norm_trans] = [now, event.message_id, author_id]
-                save_recent_links()
+                await bot.rest.create_message(DESTINATION_CHANNEL_ID, f"{repost_prefix}{post_url}")
+                norm_trans = normalize_link(post_url.rstrip('/'))
+        else:
+            transformed_link = transform_url(first_allowed_link)
+            if not transformed_link:
+                transformed_link = first_allowed_link
+            await bot.rest.create_message(DESTINATION_CHANNEL_ID, f"{repost_prefix}{transformed_link}")
+            norm_trans = normalize_link(transformed_link.rstrip('/'))
+        # Handle Redgifs as a second allowed link
+        if redgifs_link:
+            direct_mp4 = await get_redgifs_mp4(redgifs_link)
+            msg = f"{repost_prefix}{direct_mp4 if direct_mp4 else redgifs_link}"
+            await bot.rest.create_message(DESTINATION_CHANNEL_ID, msg)
+        # Save recent link
+        if norm_trans:
+            recent_links[norm_trans] = [now, event.message_id, author_id]
+            save_recent_links()
+        await bot.rest.delete_message(event.channel_id, event.message_id)
     except hikari.ForbiddenError:
         logger.error("Bot doesn't have permission to post or delete in the destination channel")
         print_permissions_guide()
