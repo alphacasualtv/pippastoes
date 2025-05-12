@@ -473,46 +473,6 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     repost_prefix = f"{author_mention} "
     if user_text:
         repost_prefix += user_text + "\n"
-    # Helper to post embeds with fallback
-    async def validate_image_url(url: str) -> bool:
-        """Return True if the URL is a public image accessible by Discord (status 200, image content-type, valid extension)."""
-        if not any(url.lower().endswith(ext) for ext in MEDIA_EXTENSIONS):
-            return False
-        try:
-            timeout = aiohttp.ClientTimeout(total=5)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.head(url, allow_redirects=True) as resp:
-                    ctype = resp.headers.get("Content-Type", "")
-                    if resp.status == 200 and ctype.startswith("image/"):
-                        return True
-        except Exception as e:
-            logger.info(f"[validate_image_url] Failed for {url}: {e}")
-        return False
-
-    async def post_embeds_with_fallback(post_url, images, channel_id, message_prefix):
-        # Validate images before embedding
-        valid_images = []
-        for img_url in images:
-            if await validate_image_url(img_url):
-                valid_images.append(img_url)
-            else:
-                logger.info(f"[gallery] Rejected image URL: {img_url}")
-        embeds = [hikari.Embed().set_image(img_url) for img_url in valid_images]
-        if embeds:
-            try:
-                for i in range(0, len(embeds), 10):
-                    batch = embeds[i:i+10]
-                    content = f"{message_prefix}{post_url}" if i == 0 else None
-                    await bot.rest.create_message(channel_id, content, embeds=batch)
-                return True
-            except Exception as e:
-                logger.warning(f"Failed to post gallery embeds, falling back to vxreddit: {e}")
-        # Fallback: post vxreddit/rxreddit link
-        vx_url = post_url.replace('reddit.com', 'vxreddit.com').replace('www.reddit.com', 'vxreddit.com')
-        await bot.rest.create_message(channel_id, f"{message_prefix}{vx_url}")
-        return False
-
-    # Process the first allowed link
     first_allowed_link = allowed_links[0]
     parsed = urllib.parse.urlparse(first_allowed_link)
     netloc = parsed.netloc.lower()
@@ -523,30 +483,13 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     now = time.time()
     try:
         if is_reddit:
-            # Expand shortlink if needed
+            # Always use vxreddit/rxreddit for repost
             if 'redd.it' in netloc:
                 first_allowed_link = await expand_reddit_shortlink(first_allowed_link)
             post_url = normalize_reddit_post_url(first_allowed_link)
-            meta = await fetch_reddit_post_metadata(post_url)
-            if meta["type"] == "image" and meta.get("images"):
-                await post_embeds_with_fallback(post_url, meta["images"], DESTINATION_CHANNEL_ID, repost_prefix)
-                norm_trans = normalize_link(post_url.rstrip('/'))
-            elif meta["type"] == "gallery" and meta.get("images"):
-                await post_embeds_with_fallback(post_url, meta["images"], DESTINATION_CHANNEL_ID, repost_prefix)
-                norm_trans = normalize_link(post_url.rstrip('/'))
-            elif meta["type"] == "redgifs" and meta.get("redgifs_url"):
-                redgifs_url = meta["redgifs_url"]
-                direct_mp4 = await get_redgifs_mp4(redgifs_url)
-                msg = f"{repost_prefix}{direct_mp4 if direct_mp4 else redgifs_url}"
-                await bot.rest.create_message(DESTINATION_CHANNEL_ID, msg)
-                norm_trans = normalize_link(post_url.rstrip('/'))
-            elif meta["type"] in ("video", "other", "unknown"):
-                vx_url = post_url.replace('reddit.com', 'vxreddit.com').replace('www.reddit.com', 'vxreddit.com')
-                await bot.rest.create_message(DESTINATION_CHANNEL_ID, f"{repost_prefix}{vx_url}")
-                norm_trans = normalize_link(vx_url.rstrip('/'))
-            else:
-                await bot.rest.create_message(DESTINATION_CHANNEL_ID, f"{repost_prefix}{post_url}")
-                norm_trans = normalize_link(post_url.rstrip('/'))
+            vx_url = post_url.replace('reddit.com', 'vxreddit.com').replace('www.reddit.com', 'vxreddit.com')
+            await bot.rest.create_message(DESTINATION_CHANNEL_ID, f"{repost_prefix}{vx_url}")
+            norm_trans = normalize_link(vx_url.rstrip('/'))
         else:
             transformed_link = transform_url(first_allowed_link)
             if not transformed_link:
