@@ -474,8 +474,30 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     if user_text:
         repost_prefix += user_text + "\n"
     # Helper to post embeds with fallback
+    async def validate_image_url(url: str) -> bool:
+        """Return True if the URL is a public image accessible by Discord (status 200, image content-type, valid extension)."""
+        if not any(url.lower().endswith(ext) for ext in MEDIA_EXTENSIONS):
+            return False
+        try:
+            timeout = aiohttp.ClientTimeout(total=5)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.head(url, allow_redirects=True) as resp:
+                    ctype = resp.headers.get("Content-Type", "")
+                    if resp.status == 200 and ctype.startswith("image/"):
+                        return True
+        except Exception as e:
+            logger.info(f"[validate_image_url] Failed for {url}: {e}")
+        return False
+
     async def post_embeds_with_fallback(post_url, images, channel_id, message_prefix):
-        embeds = [hikari.Embed().set_image(img_url) for img_url in images if img_url]
+        # Validate images before embedding
+        valid_images = []
+        for img_url in images:
+            if await validate_image_url(img_url):
+                valid_images.append(img_url)
+            else:
+                logger.info(f"[gallery] Rejected image URL: {img_url}")
+        embeds = [hikari.Embed().set_image(img_url) for img_url in valid_images]
         if embeds:
             try:
                 for i in range(0, len(embeds), 10):
@@ -489,6 +511,7 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
         vx_url = post_url.replace('reddit.com', 'vxreddit.com').replace('www.reddit.com', 'vxreddit.com')
         await bot.rest.create_message(channel_id, f"{message_prefix}{vx_url}")
         return False
+
     # Process the first allowed link
     first_allowed_link = allowed_links[0]
     parsed = urllib.parse.urlparse(first_allowed_link)
