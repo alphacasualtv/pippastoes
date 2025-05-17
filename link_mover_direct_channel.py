@@ -445,6 +445,7 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     author = event.author
     author_mention = f"<@{author.id}>" if author else "Unknown User"
     author_id = str(author.id) if author else None
+    now = time.time()
     # Only process the first allowed link, unless a second is Redgifs
     matches = list(re.finditer(URL_PATTERN, event.content))
     allowed_links = []
@@ -459,6 +460,49 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
                 break  # Only process one Redgifs as second link
     if not allowed_links:
         return  # Ignore messages with no allowed links
+
+    # --- DUPLICATE DETECTION AND SHAMING LOGIC (DESTINATION ONLY) ---
+    if event.channel_id == DESTINATION_CHANNEL_ID:
+        cleanup_recent_links()
+        for link in allowed_links:
+            # Transform and normalize the link for duplicate detection
+            transformed_link = transform_url(link)
+            if not transformed_link:
+                transformed_link = link
+            norm_trans = normalize_link(transformed_link.rstrip('/'))
+            entry = recent_links.get(norm_trans)
+            if entry and len(entry) == 3:
+                ts, orig_msg_id, orig_user_id = entry
+                # Only shame if not the same user and within 72 hours
+                if orig_user_id != author_id and now - ts <= RECENT_LINKS_MAX_AGE:
+                    # Try to fetch the original message
+                    try:
+                        orig_msg = await bot.rest.fetch_message(DESTINATION_CHANNEL_ID, orig_msg_id)
+                    except hikari.NotFoundError:
+                        return  # Original message deleted, ignore
+                    except Exception as e:
+                        logger.error(f"Error fetching original message for duplicate detection: {e}")
+                        return
+                    # Delete the reposted message
+                    try:
+                        await bot.rest.delete_message(event.channel_id, event.message_id)
+                    except Exception as e:
+                        logger.error(f"Error deleting duplicate message: {e}")
+                    # Reply with a snarky comment, tagging the user and referencing the original message
+                    snarky_comment = random.choice(SNARKY_COMMENTS)
+                    try:
+                        await bot.rest.create_message(
+                            DESTINATION_CHANNEL_ID,
+                            f"{author_mention} {snarky_comment}",
+                            reply=orig_msg_id
+                        )
+                    except Exception as e:
+                        logger.error(f"Error replying to original message: {e}")
+                    return  # Only need to respond to the first duplicate found
+            # If entry exists but is by the same user, allow repost
+            # If entry does not exist, continue
+    # --- END DUPLICATE DETECTION ---
+
     # Extract user text (excluding the reposted link(s)) and preserve mentions
     content_wo_links = event.content
     for link in allowed_links:
@@ -480,7 +524,6 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
         netloc = netloc[4:]
     is_reddit = netloc.endswith('reddit.com') or netloc.endswith('redd.it') or netloc.endswith('vxreddit.com') or netloc.endswith('rxddit.com')
     norm_trans = None
-    now = time.time()
     try:
         if is_reddit:
             # Always use vxreddit/rxreddit for repost
@@ -501,7 +544,7 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
             direct_mp4 = await get_redgifs_mp4(redgifs_link)
             msg = f"{repost_prefix}{direct_mp4 if direct_mp4 else redgifs_link}"
             await bot.rest.create_message(DESTINATION_CHANNEL_ID, msg)
-        # Save recent link
+        # Save recent link (timestamp, message_id, user_id)
         if norm_trans:
             recent_links[norm_trans] = [now, event.message_id, author_id]
             save_recent_links()
