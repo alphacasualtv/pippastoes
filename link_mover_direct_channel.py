@@ -464,12 +464,14 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     # --- DUPLICATE DETECTION AND SHAMING LOGIC (DESTINATION ONLY) ---
     if event.channel_id == DESTINATION_CHANNEL_ID:
         cleanup_recent_links()
+        logger.info(f"[DUPLICATE CHECK] Checking message from {author.username} in destination channel")
         for link in allowed_links:
             # Transform and normalize the link for duplicate detection
-            transformed_link = transform_url(link)
+            transformed_link = await transform_and_expand_url(link)
             if not transformed_link:
                 transformed_link = link
             norm_trans = normalize_link(transformed_link.rstrip('/'))
+            logger.info(f"[DUPLICATE CHECK] Normalized link: {norm_trans}")
             entry = recent_links.get(norm_trans)
             if entry and len(entry) == 3:
                 ts, orig_msg_id, orig_user_id = entry
@@ -501,6 +503,21 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
                     return  # Only need to respond to the first duplicate found
             # If entry exists but is by the same user, allow repost
             # If entry does not exist, continue
+        
+        # If we reach here and it's a destination channel message, 
+        # it's a new link that should be saved for future duplicate detection
+        if event.channel_id == DESTINATION_CHANNEL_ID:
+            # Transform and normalize each allowed link
+            for link in allowed_links:
+                transformed_link = transform_url(link)
+                if not transformed_link:
+                    transformed_link = link
+                norm_trans = normalize_link(transformed_link.rstrip('/'))
+                # Save this new link with the current message info
+                if norm_trans:
+                    recent_links[norm_trans] = [now, event.message_id, author_id]
+                    save_recent_links()
+            return  # Don't repost messages from destination channel
     # --- END DUPLICATE DETECTION ---
 
     # Extract user text (excluding the reposted link(s)) and preserve mentions
@@ -525,30 +542,33 @@ async def on_message(event: hikari.GuildMessageCreateEvent) -> None:
     is_reddit = netloc.endswith('reddit.com') or netloc.endswith('redd.it') or netloc.endswith('vxreddit.com') or netloc.endswith('rxddit.com')
     norm_trans = None
     try:
+        bot_message = None  # Store the bot's message
         if is_reddit:
             # Always use vxreddit/rxreddit for repost
             if 'redd.it' in netloc:
                 first_allowed_link = await expand_reddit_shortlink(first_allowed_link)
             post_url = normalize_reddit_post_url(first_allowed_link)
             vx_url = post_url.replace('reddit.com', 'vxreddit.com').replace('www.reddit.com', 'vxreddit.com')
-            await bot.rest.create_message(DESTINATION_CHANNEL_ID, f"{repost_prefix}{vx_url}")
+            bot_message = await bot.rest.create_message(DESTINATION_CHANNEL_ID, f"{repost_prefix}{vx_url}")
             norm_trans = normalize_link(vx_url.rstrip('/'))
         else:
             transformed_link = transform_url(first_allowed_link)
             if not transformed_link:
                 transformed_link = first_allowed_link
-            await bot.rest.create_message(DESTINATION_CHANNEL_ID, f"{repost_prefix}{transformed_link}")
+            bot_message = await bot.rest.create_message(DESTINATION_CHANNEL_ID, f"{repost_prefix}{transformed_link}")
             norm_trans = normalize_link(transformed_link.rstrip('/'))
         # Handle Redgifs as a second allowed link
         if redgifs_link:
             direct_mp4 = await get_redgifs_mp4(redgifs_link)
             msg = f"{repost_prefix}{direct_mp4 if direct_mp4 else redgifs_link}"
             await bot.rest.create_message(DESTINATION_CHANNEL_ID, msg)
-        # Save recent link (timestamp, message_id, user_id)
-        if norm_trans:
-            recent_links[norm_trans] = [now, event.message_id, author_id]
+        # Save recent link (timestamp, bot's message_id in destination channel, user_id)
+        if norm_trans and bot_message:
+            recent_links[norm_trans] = [now, bot_message.id, author_id]
             save_recent_links()
-        await bot.rest.delete_message(event.channel_id, event.message_id)
+        # Only delete if it's from the source channel
+        if event.channel_id == SOURCE_CHANNEL_ID:
+            await bot.rest.delete_message(event.channel_id, event.message_id)
     except hikari.ForbiddenError:
         logger.error("Bot doesn't have permission to post or delete in the destination channel")
         print_permissions_guide()
