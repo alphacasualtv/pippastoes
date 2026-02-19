@@ -111,7 +111,6 @@ URL_TRANSFORMATIONS = {
     'tiktok.com': 'vxtiktok.com',
     'x.com': 'fxtwitter.com',
     'twitter.com': 'fxtwitter.com',  # Also handle twitter.com
-    'youtube.com': 'youtu.be',
     'bsky.app': 'bskx.app'
 }
 
@@ -333,13 +332,18 @@ def transform_url(url: str) -> str:
         if 'watch?v=' in path:
             video_id = re.search(r'watch\?v=([^&\s]+)', path)
             if video_id:
-                return f'https://youtu.be/{video_id.group(1)}'
+                return f'https://www.youtube.com/watch?v={video_id.group(1)}'
         elif '/shorts/' in path:
             shorts_id = path.split('/shorts/')[1].split('?')[0]
-            return f'https://youtu.be/{shorts_id}'
+            return f'https://www.youtube.com/watch?v={shorts_id}'
         elif '/live/' in path:
             live_id = path.split('/live/')[1].split('?')[0]
-            return f'https://youtu.be/{live_id}'
+            return f'https://www.youtube.com/watch?v={live_id}'
+        elif netloc.endswith('youtu.be'):
+            # Convert youtu.be short links to watch links
+            video_id = path.lstrip('/').split('?')[0]
+            if video_id:
+                return f'https://www.youtube.com/watch?v={video_id}'
     # Instagram
     if netloc.endswith('instagram.com') or netloc.endswith('ddinstagram.com'):
         return url.replace('instagram.com', 'ddinstagram.com')
