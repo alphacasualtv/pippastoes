@@ -1,9 +1,9 @@
 version: '3.8'
 
 services:
-  discord-link-mover:
+  pippastoes:
     build: .
-    container_name: discord-link-mover
+    container_name: pippastoes
     restart: unless-stopped
     environment:
       BOT_TOKEN: ${BOT_TOKEN}
@@ -11,4 +11,6 @@ services:
       DESTINATION_CHANNEL_ID: ${DESTINATION_CHANNEL_ID}
     volumes:
       - ./logs:/app/logs
-    # No ports needed for Discord bots 
+    # Optional: uncomment if you prefer mounting a .env file
+    # env_file:
+    #   - .env
