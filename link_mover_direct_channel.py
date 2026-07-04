@@ -63,7 +63,7 @@ logger = logging.getLogger("LinkMover")
 # Allowed platforms for transformation and posting
 ALLOWED_DOMAINS = [
     'youtube.com', 'youtu.be',
-    'twitter.com', 'x.com', 'fxtwitter.com',
+    'twitter.com', 'x.com', 'fxtwitter.com', 'vxtwitter.com',   # ← added vxtwitter.com
     'reddit.com', 'redd.it', 'vxreddit.com',
     'instagram.com', 'ddinstagram.com',
     'tiktok.com', 'vxtiktok.com',
@@ -109,8 +109,8 @@ URL_TRANSFORMATIONS = {
     'instagram.com': 'ddinstagram.com',
     'pixiv.net': 'phixiv.net',
     'tiktok.com': 'vxtiktok.com',
-    'x.com': 'fxtwitter.com',
-    'twitter.com': 'fxtwitter.com',  # Also handle twitter.com
+    'x.com': 'fxtwitter.com', 'vxtwitter.com'
+    'twitter.com': 'fxtwitter.com', 'vxtwitter.com' # Also handle twitter.com
     'bsky.app': 'bskx.app'
 }
 
