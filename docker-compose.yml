@@ -10,7 +10,7 @@ services:
       SOURCE_CHANNEL_ID: ${SOURCE_CHANNEL_ID}
       DESTINATION_CHANNEL_ID: ${DESTINATION_CHANNEL_ID}
     volumes:
-      - ./logs:/app/logs
-    # Optional: uncomment if you prefer mounting a .env file
-    # env_file:
-    #   - .env
+      - pippastoes_logs:/app/logs
+
+volumes:
+  pippastoes_logs:
