@@ -4,22 +4,27 @@ FROM python:3.10-slim
 # Set working directory
 WORKDIR /app
 
-# Copy requirements.txt first to leverage Docker caching
+# Create non-root user
+RUN groupadd --system botgroup && \
+    useradd --system --gid botgroup --create-home --shell /bin/false botuser
+
+# Copy requirements first (better layer caching)
 COPY requirements.txt .
 
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy bot code and all necessary files
+# Copy application code
 COPY . .
 
-# Create logs directory and ensure permissions (important for volume mounts)
-RUN mkdir -p logs && chmod -R 755 logs
+# Create logs dir and set ownership
+RUN mkdir -p logs && chown -R botuser:botgroup /app
 
-# Set environment variables for Python
+# Python settings
 ENV PYTHONUNBUFFERED=1
 
-# Expose no ports (Discord bots are outbound only)
+# Run as non-root user
+USER botuser
 
-# Default command
+# Start the bot
 CMD ["python", "link_mover_direct_channel.py"]
