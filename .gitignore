@@ -1,0 +1,6 @@
+.env
+.env.local
+logs/
+recent_links.json
+__pycache__/
+*.py[cod]
