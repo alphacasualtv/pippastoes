@@ -65,7 +65,7 @@ ALLOWED_DOMAINS = [
     'youtube.com', 'youtu.be',
     'twitter.com', 'x.com', 'fxtwitter.com', 'vxtwitter.com',   # ← added vxtwitter.com
     'reddit.com', 'redd.it', 'vxreddit.com',
-    'instagram.com', 'ddinstagram.com',
+    'instagram.com', 'oginstagram.com',
     'tiktok.com', 'vxtiktok.com',
 ]
 
@@ -106,7 +106,7 @@ VIDEO_DOMAINS = {
 
 # URL transformations for better embedding
 URL_TRANSFORMATIONS = {
-    'instagram.com': 'ddinstagram.com',
+    'instagram.com': 'oginstagram.com',
     'pixiv.net': 'phixiv.net',
     'tiktok.com': 'vxtiktok.com',
     'x.com': 'fxtwitter.com', 'vxtwitter.com'
@@ -345,8 +345,8 @@ def transform_url(url: str) -> str:
             if video_id:
                 return f'https://www.youtube.com/watch?v={video_id}'
     # Instagram
-    if netloc.endswith('instagram.com') or netloc.endswith('ddinstagram.com'):
-        return url.replace('instagram.com', 'ddinstagram.com')
+    if netloc.endswith('instagram.com') or netloc.endswith('oginstagram.com'):
+        return url.replace('instagram.com', 'oginstagram.com')
     # TikTok
     if netloc.endswith('tiktok.com') or netloc.endswith('vxtiktok.com'):
         return url.replace('tiktok.com', 'vxtiktok.com')
